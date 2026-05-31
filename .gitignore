@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Database files
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Logs
+*.log
+
+# Runtime files
+test_embed.txt
+weekly_report_test.txt
+pubg_matches_enhanced.json
+
+# Old JSON data (migrated to SQLite)
+match_history.json
+posted_matches.json
+config.json
