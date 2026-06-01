@@ -260,6 +260,7 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 
 ---
 
+
 ## Birthday Bot Commands
 
 | Command | Who | Description |
@@ -272,7 +273,10 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!birthdays` | Anyone | Full upcoming birthday list |
 | `!nextbirthday` | Anyone | Who's birthday is next and how many days |
 | `!wish @user <message>` | Anyone | Send a birthday wish |
-| `!birthdaytest` | Admin | Preview the birthday embed immediately |
+| `!birthdaytest` | Admin | Preview the birthday embed for yourself |
+| `!birthdayforce @user` | Admin | Force full announcement for any user right now |
+| `!giverole @user` | Admin | Give the birthday role manually (testing) |
+| `!removerole @user` | Admin | Remove the birthday role manually |
 
 ---
 
