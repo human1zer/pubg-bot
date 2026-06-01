@@ -149,7 +149,7 @@ Go to **Server Settings → Roles → Create Role**, name it exactly `🎂 Birth
 ### 6. (Optional) Seed all-time longest kills
 
 ```bash
-python scrape_longest_kills.py
+python3 fetch_longest_kills.py
 ```
 
 This populates `longest_kills_alltime.json` which powers the third embed in the weekly summary.
