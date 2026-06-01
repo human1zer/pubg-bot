@@ -62,8 +62,8 @@ def load_config(filename: str = "config.json") -> Optional[dict]:
             "weekly_channel_id":     123456789012345678,
             # Timing
             "check_interval_seconds": 150,
-            "request_delay":          7.0,
-            "max_retries":            3,
+            "request_delay":          9.0,
+            "max_retries":            2,
             # Optional: role ID to ping on chicken dinner (0 = disabled)
             "winner_role_id":         0,
             # How many posted match IDs to keep in the database

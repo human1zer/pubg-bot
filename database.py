@@ -304,3 +304,35 @@ async def migrate_posted_json(json_path: str = "posted_matches.json", db_path: s
 
     await save_posted_matches(ids, path=db_path)
     logger.info(f"✅ Migrated {len(ids)} posted match IDs from {json_path} → {db_path}")
+
+
+async def get_alltime_longest_kills(top_n: int = 10, path: str = DB_PATH) -> List[dict]:
+    """
+    Returns the top N longest kill shots ever recorded, one per player.
+    Excludes CASUAL / ARCADE / AIROYALE matches.
+    Pulls directly from the matches table — no JSON file needed.
+    """
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                player_name,
+                MAX(longest_kill) AS longest_kill,
+                map,
+                played_at
+            FROM matches
+            WHERE longest_kill > 0
+              AND UPPER(match_category) NOT IN ('CASUAL', 'ARCADE')
+              AND UPPER(match_category) NOT LIKE '%AIROYALE%'
+            GROUP BY player_name
+            ORDER BY longest_kill DESC
+            LIMIT ?;
+            """,
+            (top_n,)
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]    
+
+
+    

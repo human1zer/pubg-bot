@@ -145,9 +145,9 @@ class IntegratedPUBGBot:
                 return
             try:
                 await channel.send(embed=self.stats_manager.create_weekly_embed(weekly_data))
-                await asyncio.sleep(2)
+                await asyncio.sleep(4)
                 await channel.send(embed=self.stats_manager.create_leaderboard_embed(weekly_data, top_n=5))
-                await asyncio.sleep(2)
+                await asyncio.sleep(4)
                 alltime = self.stats_manager.create_alltime_kills_embed()
                 if alltime:
                     await channel.send(embed=alltime)
@@ -278,9 +278,9 @@ class IntegratedPUBGBot:
                 return
 
             await channel.send(embed=self.stats_manager.create_weekly_embed(weekly_data))
-            await asyncio.sleep(2)
+            await asyncio.sleep(4)
             await channel.send(embed=self.stats_manager.create_leaderboard_embed(weekly_data, top_n=5))
-            await asyncio.sleep(2)
+            await asyncio.sleep(4)
             alltime = self.stats_manager.create_alltime_kills_embed()
             if alltime:
                 await channel.send(embed=alltime)
@@ -323,7 +323,7 @@ class IntegratedPUBGBot:
             for idx, match in enumerate(new_matches, 1):
                 await self._post_single_match(channel, match, idx, len(new_matches))
                 if idx < len(new_matches):
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(4)
 
             logger.info(f"🎉 All {len(new_matches)} match(es) posted!")
             self._save_matches_for_stats(new_matches)

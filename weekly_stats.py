@@ -267,51 +267,41 @@ class WeeklyStatsManager:
         embed.set_footer(text=f"Based on {weekly_data['total_matches']} total matches")
         return embed
 
-    def create_alltime_kills_embed(self, kills_file: str = "longest_kills_alltime.json", top_n: int = 10):
-        """Kept for backwards-compat with scrape_longest_kills.py output."""
-        import json as _json
+    def create_alltime_kills_embed(self, top_n: int = 10):
+        """Builds all-time longest kills embed from the lifetime_longest_kills DB table."""
+        import asyncio
+        import concurrent.futures
 
-        if not os.path.exists(kills_file):
-            return None
         try:
-            with open(kills_file, "r", encoding="utf-8") as f:
-                data = _json.load(f)
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    from fetch_longest_kills import get_from_db
+                    future = pool.submit(asyncio.run, get_from_db())
+                    rows = future.result(timeout=30)
+            else:
+                from fetch_longest_kills import get_from_db
+                rows = loop.run_until_complete(get_from_db())
         except Exception as e:
-            logger.warning(f"⚠️ Could not load {kills_file}: {e}")
+            logger.warning(f"⚠️ Could not load lifetime kills from DB: {e}")
             return None
 
-        entries = data.get(f"top_{top_n}", data.get("top_10", []))
-        if not entries:
+        if not rows:
             return None
-
-        seen: set  = set()
-        unique: list = []
-        for entry in sorted(entries, key=lambda x: x["distance"], reverse=True):
-            p = entry["player"]
-            if p not in seen:
-                unique.append(entry)
-                seen.add(p)
-            if len(unique) == top_n:
-                break
 
         medals = ["🥇", "🥈", "🥉"] + [f"{i}." for i in range(4, top_n + 1)]
         embed = discord.Embed(
             title="🔭 All-Time Top Longest Kills",
-            description=f"Best sniper shot ever recorded per player — Top {len(unique)}",
+            description=f"Best sniper shot ever recorded per player — Top {min(top_n, len(rows))}",
             color=discord.Color.from_rgb(138, 43, 226),
             timestamp=datetime.now(),
         )
         lines = [
-            f"{medals[i] if i < len(medals) else f'{i+1}.'} **{e['player']}** — `{e['distance']:.1f}m` *({e.get('date','')[:10]})*"
-            for i, e in enumerate(unique)
+            f"{medals[i] if i < len(medals) else f'{i+1}.'} **{r['player_name']}** — {r['longest_kill']:.1f}m"
+            for i, r in enumerate(rows[:top_n])
         ]
         embed.add_field(name="🎯 Rankings", value="\n".join(lines) or "No data yet", inline=False)
-        embed.set_footer(
-            text=(
-                f"Compiled from {data.get('total_entries', len(entries))} kill records "
-                f"• Updated {data.get('generated_at','')[:10]}"
-            )
-        )
+        embed.set_footer(text=f"Updated via PUBG Lifetime API • {datetime.now().strftime('%Y-%m-%d')}")
         return embed
 
     # ── !best embed ──────────────────────────────────────────────────────────

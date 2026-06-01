@@ -2,6 +2,7 @@
 # Format: PlayerName  (one per line)
 #
 ElToPo94
+cryptointhegame
 PhatSanta
 Human1zer
 Arma3Hunter
@@ -16,11 +17,9 @@ WhiteRain88
 NagyArpi
 RickyT23
 CharlotteJB
-GuntherGsolin95
 The-real-Woedy
-MrJackie_55
-cryptointhegame
-
+MisterJackie
+Squidddy
 TheDoorHandle
 UaE-Devil
 bustinbigloadz
