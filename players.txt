@@ -1,8 +1,7 @@
 # PUBG Players to Track
-# Format: PlayerName  (one per line)
+# Format: PlayerName (one per line)
 #
 ElToPo94
-cryptointhegame
 PhatSanta
 Human1zer
 Arma3Hunter
@@ -11,7 +10,6 @@ dreamsonic_by
 GardnerZZ
 F-1-R-E
 Flatfoot
-LUCKundLEDERasmr
 Major-R-Sole-74
 WhiteRain88
 NagyArpi
@@ -27,3 +25,8 @@ fatB0y2601
 HairyBadger02
 MisterMiasma
 Flacketts
+muscles-MOMMY
+Hasibfit
+K11_M3_Plz
+
+HmedoNedo

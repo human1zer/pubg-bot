@@ -4,6 +4,26 @@ from typing import List, Optional
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Shared map lookups
+# ─────────────────────────────────────────────────────────────────────────────
+
+MAP_EMOJIS = {
+    "Baltic_Main":    "🏔️", "Desert_Main":    "🏜️", "DihorOtok_Main": "🏝️",
+    "Erangel_Main":   "🌾", "Heaven_Main":    "🌸", "Kiki_Main":       "🌴",
+    "Range_Main":     "🎯", "Savage_Main":    "🌴", "Summerland_Main": "☀️",
+    "Tiger_Main":     "🐯", "Chimera_Main":   "🦁",
+}
+MAP_NAMES = {
+    "Baltic_Main":    "Erangel (Old)", "Desert_Main":    "Miramar",
+    "DihorOtok_Main": "Vikendi",        "Erangel_Main":   "Erangel",
+    "Heaven_Main":    "Haven",          "Kiki_Main":      "Deston",
+    "Range_Main":     "Training",       "Savage_Main":    "Sanhok",
+    "Summerland_Main":"Karakin",        "Tiger_Main":     "Taego",
+    "Chimera_Main":   "Paramo",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Match embed (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -31,24 +51,9 @@ def create_enhanced_match_embed(match: dict, match_num: int, total_matches: int)
         color      = discord.Color.red()
         rank_emoji = "💀"
 
-    map_emojis = {
-        "Baltic_Main":    "🏔️", "Desert_Main":    "🏜️", "DihorOtok_Main": "🏝️",
-        "Erangel_Main":   "🌾", "Heaven_Main":    "🌸", "Kiki_Main":       "🌴",
-        "Range_Main":     "🎯", "Savage_Main":    "🌴", "Summerland_Main": "☀️",
-        "Tiger_Main":     "🐯", "Chimera_Main":   "🦁",
-    }
-    map_names = {
-        "Baltic_Main":    "Erangel (Old)", "Desert_Main":    "Miramar",
-        "DihorOtok_Main": "Vikendi",        "Erangel_Main":   "Erangel",
-        "Heaven_Main":    "Haven",          "Kiki_Main":      "Deston",
-        "Range_Main":     "Training",       "Savage_Main":    "Sanhok",
-        "Summerland_Main":"Karakin",        "Tiger_Main":     "Taego",
-        "Chimera_Main":   "Paramo",
-    }
-
     map_name    = match.get("map", "Unknown")
-    map_emoji   = map_emojis.get(map_name, "🗺️")
-    map_display = map_names.get(map_name, map_name.replace("_Main", ""))
+    map_emoji   = MAP_EMOJIS.get(map_name, "🗺️")
+    map_display = MAP_NAMES.get(map_name, map_name.replace("_Main", ""))
 
     player_count = len(all_players_stats)
     category     = match.get("match_category", "MATCH")
@@ -149,17 +154,8 @@ def create_winner_embed(winners: List[str], match: dict) -> discord.Embed:
     Special embed posted after a #1 finish.
     `winners` is the list of tracked player names who placed #1.
     """
-    map_names = {
-        "Baltic_Main":    "Erangel (Old)", "Desert_Main":    "Miramar",
-        "DihorOtok_Main": "Vikendi",        "Erangel_Main":   "Erangel",
-        "Heaven_Main":    "Haven",          "Kiki_Main":      "Deston",
-        "Range_Main":     "Training",       "Savage_Main":    "Sanhok",
-        "Summerland_Main":"Karakin",        "Tiger_Main":     "Taego",
-        "Chimera_Main":   "Paramo",
-    }
-
     map_name    = match.get("map", "Unknown")
-    map_display = map_names.get(map_name, map_name.replace("_Main", ""))
+    map_display = MAP_NAMES.get(map_name, map_name.replace("_Main", ""))
     mode_display= match.get("game_mode", "squad").replace("-fpp", " (FPP)").title()
     category    = match.get("match_category", "NORMAL")
 

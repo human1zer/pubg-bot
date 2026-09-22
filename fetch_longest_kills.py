@@ -10,10 +10,11 @@ No more Discord scraping. No more JSON files.
 
 import asyncio
 import aiohttp
-import json
 import logging
 import os
 from datetime import datetime, timezone
+
+from config import load_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,23 +23,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-PLAYERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "players.txt")
-DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pubg_bot.db")
+PLAYERS_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "players.txt")
+DB_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pubg_bot.db")
 REQUEST_DELAY = 10.0
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-with open(CONFIG_PATH) as f:
-    config = json.load(f)
+config = load_config()
+if not config:
+    raise SystemExit(1)
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-API_KEY = os.getenv("PUBG_API_KEY") or config.get("pubg_api_key")
+API_KEY = config.get("pubg_api_key")
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
     "Accept": "application/vnd.api+json",

@@ -1,11 +1,11 @@
 # 🎮 PUBG + Birthday Discord Bot
 
-A self-hosted Discord bot suite with two bots in one repo:
+A self-hosted Discord bot with two features in one process, loaded as separate Cogs:
 
 - **PUBG Tracker** — automatically tracks matches for a list of players and posts rich stat embeds to your server
 - **Birthday Bot** — tracks birthdays, announces them daily, gives a special role, and collects wishes
 
-Both run as systemd services and share the same config file.
+Both share one Discord connection (one bot token, one `!` command prefix) and the same config file, started together by `Main.py`.
 
 ---
 
@@ -16,7 +16,8 @@ Both run as systemd services and share the same config file.
 - Rich match embeds — kills, damage, headshots, longest kill, survival time, heals, boosts, revives, placement
 - Group match detection — if multiple tracked players were in the same match, posts one combined embed
 - Chicken dinner alert — special gold embed when any tracked player places #1, with optional role ping
-- Weekly summaries — every Wednesday at 18:00 UTC posts best player, full leaderboard, and all-time longest kills
+- Weekly summaries — once a week (configurable day/hour/timezone, default Sunday 18:00 Europe/Oslo) posts best player, full leaderboard, and all-time longest kills
+- Wall of Shame — posted right after the weekly summary, same run, same channel: the week's worst plays, followed by a dry, deadpan digest of every shame-worthy event from that week
 - SQLite storage — all match history and deduplication backed by a proper database
 - Dynamic player management — add/remove players via Discord commands without restarting
 - No duplicate posts — match IDs are persisted so restarts never double-post
@@ -35,14 +36,18 @@ Both run as systemd services and share the same config file.
 
 ```
 pubg-bot/
-├── Main.py                  # PUBG bot entry point
-├── bot.py                   # PUBG bot — Discord commands, polling loop, match posting
+├── Main.py                  # Single entry point — creates the bot, loads both cogs, runs it
+├── config.py                # Shared config.json + .env loader
+├── bot.py                   # PUBGCog — Discord commands, polling loop, match posting
 ├── tracker.py               # Async PUBG API client
 ├── embeds.py                # Match embed builder + chicken dinner embed
 ├── weekly_stats.py          # Weekly stats calculations and embed builders
-├── database.py              # Async SQLite layer (matches + posted match IDs)
-├── birthday_bot.py          # Birthday bot — full standalone bot
-├── scrape_longest_kills.py  # One-time scraper to seed all-time longest kills data
+├── shame.py                 # Wall of Shame — weekly award board + weekly digest lines
+├── database.py              # Async SQLite layer (matches, posted match IDs, bot state)
+├── birthday_bot.py          # BirthdayCog — birthday commands, daily announcement, PUBG crossover
+├── fetch_longest_kills.py   # Weekly job to seed all-time longest kills data from the PUBG API
+├── scripts/
+│   └── clan_kill_scanner.py # Manual one-off utility, not part of the bot's runtime
 ├── players.txt              # PUBG player names to track (one per line)
 ├── config.example.json      # Config template — copy to config.json and fill in
 └── .env.example             # Secrets template — copy to .env and fill in
@@ -98,6 +103,11 @@ DISCORD_TOKEN=your_discord_bot_token
   "discord_token": "fallback_if_no_env",
   "discord_channel_id": 0,
   "weekly_channel_id": 0,
+  "shame_dry_run": false,
+  "shame_top_n": 5,
+  "weekly_post_day": 6,
+  "weekly_post_hour": 18,
+  "weekly_post_timezone": "Europe/Oslo",
   "check_interval_seconds": 150,
   "request_delay": 7,
   "max_retries": 3,
@@ -113,7 +123,12 @@ DISCORD_TOKEN=your_discord_bot_token
 | Key | Description |
 |---|---|
 | `discord_channel_id` | Channel for PUBG match posts |
-| `weekly_channel_id` | Channel for weekly summaries |
+| `weekly_channel_id` | Channel for weekly summaries and the Wall of Shame weekly post — award board + digest lines (`!shame`/`!shamenow`/`!shametest` always post here) |
+| `shame_dry_run` | When true, `!shametest` previews the weekly shame post without posting it to the weekly channel |
+| `shame_top_n` | How many players to list per Wall of Shame award, worst first (default 5) |
+| `weekly_post_day` | Day of week for the weekly summary + Wall of Shame run — `datetime.weekday()` values, Monday=0 … Sunday=6 (default 6) |
+| `weekly_post_hour` | Local hour (in `weekly_post_timezone`) for the weekly summary + Wall of Shame run (default 18) |
+| `weekly_post_timezone` | IANA timezone name for `weekly_post_hour` — using a local zone instead of UTC keeps the wall-clock hour fixed across daylight saving changes (default `Europe/Oslo`) |
 | `winner_role_id` | Role ID to ping on chicken dinner (0 = disabled) |
 | `posted_matches_max_history` | How many match IDs to keep for deduplication |
 | `birthday_channel_id` | Channel for birthday announcements |
@@ -156,9 +171,10 @@ This populates `longest_kills_alltime.json` which powers the third embed in the 
 
 ---
 
-## Running as systemd services
+## Running as a systemd service
 
-### PUBG Bot
+PUBG tracking and the birthday bot now run in the same process (`Main.py` loads both
+as Cogs on one Discord connection), so only one service is needed.
 
 ```bash
 sudo nano /etc/systemd/system/pubgbot.service
@@ -166,7 +182,7 @@ sudo nano /etc/systemd/system/pubgbot.service
 
 ```ini
 [Unit]
-Description=PUBG Discord Bot
+Description=PUBG + Birthday Discord Bot
 After=network.target
 
 [Service]
@@ -181,30 +197,7 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-### Birthday Bot
-
-```bash
-sudo nano /etc/systemd/system/birthdaybot.service
-```
-
-```ini
-[Unit]
-Description=Discord Birthday Bot
-After=network.target
-
-[Service]
-Type=simple
-User=YOUR_USER
-WorkingDirectory=/path/to/pubg-bot
-ExecStart=/path/to/pubg-bot/venv/bin/python birthday_bot.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Longest kills scraper (weekly, Wednesdays 15:00)
+### Longest kills fetcher (weekly, Wednesdays 15:00)
 
 ```bash
 sudo nano /etc/systemd/system/pubg-scraper.service
@@ -212,13 +205,13 @@ sudo nano /etc/systemd/system/pubg-scraper.service
 
 ```ini
 [Unit]
-Description=PUBG Longest Kills Scraper
+Description=PUBG Longest Kills Fetcher
 
 [Service]
 Type=oneshot
 User=YOUR_USER
 WorkingDirectory=/path/to/pubg-bot
-ExecStart=/path/to/pubg-bot/venv/bin/python scrape_longest_kills.py
+ExecStart=/path/to/pubg-bot/venv/bin/python fetch_longest_kills.py
 ```
 
 ```bash
@@ -256,6 +249,9 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!listplayers` | Anyone | Show all currently tracked players |
 | `!best` | Anyone | All-time personal best records per player |
 | `!weeklynow` | Admin | Manually trigger the weekly summary |
+| `!shame` | Anyone | Post the Wall of Shame award board + digest lines — always posts to the weekly channel |
+| `!shamenow` | Admin | Force-post the Wall of Shame award board + digest lines |
+| `!shametest` | Admin | Preview the full weekly post (award board + digest lines); respects `shame_dry_run` |
 | `!testpost [name]` | Admin | Generate a test embed saved to `test_embed.txt` |
 
 ---
@@ -282,13 +278,47 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 
 ## Weekly Summary
 
-Every **Wednesday at 18:00 UTC** the bot automatically posts three embeds:
+Every week, at the time set by `weekly_post_day` / `weekly_post_hour` / `weekly_post_timezone` (default **Sunday at 18:00 Europe/Oslo** — a local zone rather than UTC, so the hour stays 18:00 through daylight saving changes), the bot automatically posts three embeds to `weekly_channel_id`:
 
 1. **Best Player of the Week** — top performer across kills, damage, wins, survival
 2. **Leaderboard** — top 5 players ranked by composite score
-3. **All-Time Longest Kills** — requires running `scrape_longest_kills.py` first
+3. **All-Time Longest Kills** — requires running `fetch_longest_kills.py` first
+
+Right after, in the same run, it posts the Wall of Shame (see below) to the same `weekly_channel_id`.
 
 Trigger manually anytime with `!weeklynow`. Casual, Arcade, and Airoyale matches are excluded from all stats.
+
+---
+
+## Wall of Shame
+
+Every week, right after the weekly summary (same `weekly_post_day` / `weekly_post_hour` / `weekly_post_timezone` schedule, default **Sunday at 18:00 Europe/Oslo**), the bot posts to `weekly_channel_id`, covering the last 7 days: the award board, followed by the week's digest lines, both in the same channel.
+
+**Award board:** each award is a ranked, numbered list of up to `shame_top_n` players (worst first), e.g.:
+
+```
+Suicide King
+1. Flacketts — 4
+2. Arma3Hunter — 3
+3. CharlotteJB — 2
+4. Hasibfit — 2
+5. Squidddy — 1
+```
+
+- **Suicide King** — most self-inflicted deaths
+- **Teamkiller** — most teammates killed
+- **Roadkiller** — most roadkills
+- **Blue Zone Food** — most deaths to the blue zone
+- **Quitter** — most logouts mid-match
+- **Worst KD** — lowest kills-per-death, minimum 10 matches played
+
+Only players with a value greater than 0 are listed. An award is skipped entirely if nobody qualifies. Ties are broken alphabetically. Player names are compared case-insensitively (so `players.txt` entries like `Hasibfit` and `hasibfit` count as one player). The embed footer shows the total matches the board was calculated from, plus the date.
+
+**Digest lines:** a dry, deadpan line for every shame-worthy event that week (suicides, teamkills, roadkills, blue zone deaths, logouts), most recent first — capped at 25 lines with a `+N more` if there's more. Since it runs once a week over a fixed 7-day window, there's no dedup — every qualifying event in range is included every time.
+
+Trigger the award board manually anytime with `!shame` (anyone) or force it with `!shamenow` (admin) — both always post to `weekly_channel_id`, regardless of where the command was typed.
+
+Preview the full weekly post (award board + digest lines) with `!shametest` (admin). With `shame_dry_run: true` in config, it logs the rendered output to stdout and echoes it back in the invoking channel instead of posting to `weekly_channel_id` — handy for tuning wording without spamming the real channel.
 
 ---
 

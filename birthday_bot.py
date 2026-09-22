@@ -1,5 +1,5 @@
 """
-birthday_bot.py — Discord Birthday Bot
+birthday_bot.py — Discord Birthday Bot (Cog)
 
 Features:
   - Register birthdays (!setbirthday, !removebirthday)
@@ -12,6 +12,7 @@ Features:
   - !birthdayforce @user — admin: force announcement for any user
   - !giverole @user / !removerole @user — admin: test the birthday role
   - PUBG crossover — if birthday person gets chicken dinner, special embed
+    (wired up by PUBGCog calling check_pubg_birthday_dinner())
   - All data stored in SQLite
 
 AI UPGRADE PATH:
@@ -23,7 +24,7 @@ import asyncio
 import logging
 import os
 import random
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timezone
 from typing import Optional
 
 import aiosqlite
@@ -118,6 +119,15 @@ async def init_db():
                 PRIMARY KEY (user_id, year)
             );
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS wish_messages (
+                birthday_user_id  TEXT NOT NULL,
+                year              INTEGER NOT NULL,
+                channel_id        TEXT NOT NULL,
+                message_id        TEXT NOT NULL,
+                PRIMARY KEY (birthday_user_id, year)
+            );
+        """)
         await db.commit()
     logger.info(f"✅ Birthday DB ready: {DB_PATH}")
 
@@ -197,6 +207,28 @@ async def get_wishes_today(birthday_user_id: str):
             (birthday_user_id, date.today().year)
         )
         return [dict(r) for r in await cursor.fetchall()]
+
+
+async def save_wish_message(birthday_user_id: str, channel_id: int, message_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO wish_messages (birthday_user_id, year, channel_id, message_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(birthday_user_id, year) DO UPDATE SET
+                channel_id=excluded.channel_id,
+                message_id=excluded.message_id;
+        """, (birthday_user_id, date.today().year, str(channel_id), str(message_id)))
+        await db.commit()
+
+
+async def get_wish_message(birthday_user_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT channel_id, message_id FROM wish_messages WHERE birthday_user_id = ? AND year = ?;",
+            (birthday_user_id, date.today().year)
+        )
+        row = await cursor.fetchone()
+        return (int(row[0]), int(row[1])) if row else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,228 +338,239 @@ def make_upcoming_embed(birthdays: list) -> discord.Embed:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bot
+# Cog
 # ─────────────────────────────────────────────────────────────────────────────
 
-class BirthdayBot:
-    def __init__(self, token: str, birthday_channel_id: int,
-                 birthday_role_name: str = "🎂 Birthday",
-                 announce_hour_utc: int = 8,
-                 pubg_channel_id: int = 0):
-
-        self.token               = token
+class BirthdayCog(commands.Cog, name="BirthdayCog"):
+    def __init__(
+        self,
+        bot: commands.Bot,
+        birthday_channel_id: int,
+        birthday_role_name: str = "🎂 Birthday",
+        announce_hour_utc: int = 8,
+        pubg_channel_id: int = 0,
+    ):
+        self.bot                 = bot
         self.birthday_channel_id = birthday_channel_id
         self.birthday_role_name  = birthday_role_name
         self.announce_hour_utc   = announce_hour_utc
         self.pubg_channel_id     = pubg_channel_id
 
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        self.client = commands.Bot(command_prefix="!", intents=intents)
-        self.client.event(self.on_ready)
-        self._register_commands()
+    async def cog_load(self):
+        await init_db()
+        self.daily_birthday_check.start()
+        self.midnight_role_cleanup.start()
+
+    async def cog_unload(self):
+        self.daily_birthday_check.cancel()
+        self.midnight_role_cleanup.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        logger.info(f"🎂 Birthday cog ready — announcing in channel {self.birthday_channel_id}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Commands
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _register_commands(self):
-
-        @self.client.command(name="setbirthday")
-        async def setbirthday(ctx, target: str, date_str: str = None):
-            """
-            !setbirthday DD/MM         — set your own birthday
-            !setbirthday DD/MM/YYYY    — with birth year (shows age)
-            !setbirthday @user DD/MM   — admin sets someone else's
-            """
-            if ctx.message.mentions and date_str:
-                if not ctx.author.guild_permissions.administrator:
-                    await ctx.send("❌ Only admins can set other people's birthdays!")
-                    return
-                member = ctx.message.mentions[0]
-                date_input = date_str
-            else:
-                member = ctx.author
-                date_input = target
-
-            parts = date_input.split("/")
-            try:
-                day   = int(parts[0])
-                month = int(parts[1])
-                year  = int(parts[2]) if len(parts) == 3 else None
-                if not (1 <= day <= 31 and 1 <= month <= 12):
-                    raise ValueError
-                if year and not (1900 <= year <= date.today().year):
-                    raise ValueError
-            except (ValueError, IndexError):
-                await ctx.send("❌ Invalid date! Use `DD/MM` or `DD/MM/YYYY` — e.g. `!setbirthday 25/12` or `!setbirthday 25/12/1995`")
-                return
-
-            await set_birthday(str(member.id), member.display_name, day, month, year)
-            age_str = f" (born {year})" if year else ""
-            await ctx.send(f"✅ Birthday set for **{member.display_name}**: **{day:02d}/{month:02d}**{age_str} 🎂")
-
-        @self.client.command(name="removebirthday")
-        async def removebirthday(ctx, target: discord.Member = None):
-            """!removebirthday — remove your own birthday (admin can target @user)"""
-            if target and not ctx.author.guild_permissions.administrator:
-                await ctx.send("❌ Only admins can remove other people's birthdays!")
-                return
-            member = target or ctx.author
-            await remove_birthday(str(member.id))
-            await ctx.send(f"✅ Removed birthday for **{member.display_name}**.")
-
-        @self.client.command(name="birthday")
-        async def birthday(ctx, member: discord.Member = None):
-            """!birthday @user — check when someone's birthday is"""
-            member = member or ctx.author
-            all_bdays = await get_all_birthdays()
-            bday = next((b for b in all_bdays if b["user_id"] == str(member.id)), None)
-            if not bday:
-                await ctx.send(f"❌ No birthday registered for **{member.display_name}**.")
-                return
-            today = date.today()
-            bday_this_year = date(today.year, bday["month"], bday["day"])
-            if bday_this_year < today:
-                bday_this_year = date(today.year + 1, bday["month"], bday["day"])
-            days_away = (bday_this_year - today).days
-            age_str = f" (turns **{today.year - bday['year']}**)" if bday.get("year") else ""
-            if days_away == 0:
-                await ctx.send(f"🎂 **{member.display_name}**'s birthday is **TODAY!** {age_str}")
-            else:
-                await ctx.send(
-                    f"📅 **{member.display_name}**'s birthday: **{bday['day']:02d}/{bday['month']:02d}**{age_str} — in **{days_away}** days."
-                )
-
-        @self.client.command(name="birthdays")
-        async def birthdays(ctx):
-            """!birthdays — list all upcoming birthdays"""
-            all_bdays = await get_all_birthdays()
-            embed = make_upcoming_embed(all_bdays)
-            await ctx.send(embed=embed)
-
-        @self.client.command(name="nextbirthday")
-        async def nextbirthday(ctx):
-            """!nextbirthday — who's birthday is coming up next"""
-            all_bdays = await get_all_birthdays()
-            if not all_bdays:
-                await ctx.send("❌ No birthdays registered yet!")
-                return
-            today = date.today()
-            upcoming = []
-            for b in all_bdays:
-                bday = date(today.year, b["month"], b["day"])
-                if bday < today:
-                    bday = date(today.year + 1, b["month"], b["day"])
-                days_away = (bday - today).days
-                upcoming.append((days_away, b))
-            upcoming.sort(key=lambda x: x[0])
-            days_away, next_b = upcoming[0]
-            if days_away == 0:
-                await ctx.send(f"🎂 **{next_b['username']}**'s birthday is **TODAY!**")
-            else:
-                await ctx.send(
-                    f"🎉 Next birthday: **{next_b['username']}** on "
-                    f"**{next_b['day']:02d}/{next_b['month']:02d}** — in **{days_away}** days!"
-                )
-
-        @self.client.command(name="wish")
-        async def wish(ctx, member: discord.Member, *, message: str = "Happy birthday! 🎉"):
-            """!wish @user <message> — send a birthday wish"""
-            if member.id == ctx.author.id:
-                await ctx.send("❌ You can't wish yourself happy birthday! 😄")
-                return
-            all_bdays = await get_all_birthdays()
-            bday = next((b for b in all_bdays if b["user_id"] == str(member.id)), None)
-            if not bday:
-                await ctx.send(f"❌ **{member.display_name}** hasn't registered a birthday!")
-                return
-            today = date.today()
-            if not (bday["day"] == today.day and bday["month"] == today.month):
-                await ctx.send(f"❌ It's not **{member.display_name}**'s birthday today!")
-                return
-            await add_wish(str(member.id), str(ctx.author.id), ctx.author.display_name, message)
-            await ctx.send(f"✅ Wish sent to **{member.display_name}**! 🎂")
-            channel = self.client.get_channel(self.birthday_channel_id)
-            if channel:
-                wishes = await get_wishes_today(str(member.id))
-                updated_embed = make_birthday_embed(member, bday, wishes)
-                await channel.send(
-                    f"💬 **{ctx.author.display_name}** just wished **{member.display_name}** happy birthday!",
-                    embed=updated_embed,
-                )
-
-        @self.client.command(name="birthdaytest")
-        async def birthdaytest(ctx):
-            """!birthdaytest — admin: preview birthday embed for yourself"""
+    @commands.command(name="setbirthday")
+    async def setbirthday(self, ctx, target: str, date_str: str = None):
+        """
+        !setbirthday DD/MM         — set your own birthday
+        !setbirthday DD/MM/YYYY    — with birth year (shows age)
+        !setbirthday @user DD/MM   — admin sets someone else's
+        """
+        if ctx.message.mentions and date_str:
             if not ctx.author.guild_permissions.administrator:
-                await ctx.send("❌ Admins only!")
+                await ctx.send("❌ Only admins can set other people's birthdays!")
                 return
-            fake_bday = {
-                "user_id": str(ctx.author.id),
-                "username": ctx.author.display_name,
-                "day": date.today().day,
-                "month": date.today().month,
-                "year": 1990,
-            }
-            embed = make_birthday_embed(ctx.author, fake_bday, [])
-            await ctx.send("🧪 Test birthday announcement:", embed=embed)
+            member = ctx.message.mentions[0]
+            date_input = date_str
+        else:
+            member = ctx.author
+            date_input = target
 
-        @self.client.command(name="birthdayforce")
-        async def birthdayforce(ctx, member: discord.Member):
-            """!birthdayforce @user — admin: force full birthday announcement for any user"""
-            if not ctx.author.guild_permissions.administrator:
-                await ctx.send("❌ Admins only!")
-                return
-            all_bdays = await get_all_birthdays()
-            bday = next((b for b in all_bdays if b["user_id"] == str(member.id)), None)
-            if not bday:
-                await ctx.send(f"❌ No birthday registered for **{member.display_name}**!")
-                return
-            await self._give_birthday_role(member)
+        parts = date_input.split("/")
+        try:
+            day   = int(parts[0])
+            month = int(parts[1])
+            year  = int(parts[2]) if len(parts) == 3 else None
+            if not (1 <= day <= 31 and 1 <= month <= 12):
+                raise ValueError
+            if year and not (1900 <= year <= date.today().year):
+                raise ValueError
+        except (ValueError, IndexError):
+            await ctx.send("❌ Invalid date! Use `DD/MM` or `DD/MM/YYYY` — e.g. `!setbirthday 25/12` or `!setbirthday 25/12/1995`")
+            return
+
+        await set_birthday(str(member.id), member.display_name, day, month, year)
+        age_str = f" (born {year})" if year else ""
+        await ctx.send(f"✅ Birthday set for **{member.display_name}**: **{day:02d}/{month:02d}**{age_str} 🎂")
+
+    @commands.command(name="removebirthday")
+    async def removebirthday(self, ctx, target: discord.Member = None):
+        """!removebirthday — remove your own birthday (admin can target @user)"""
+        if target and not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Only admins can remove other people's birthdays!")
+            return
+        member = target or ctx.author
+        await remove_birthday(str(member.id))
+        await ctx.send(f"✅ Removed birthday for **{member.display_name}**.")
+
+    @commands.command(name="birthday")
+    async def birthday(self, ctx, member: discord.Member = None):
+        """!birthday @user — check when someone's birthday is"""
+        member = member or ctx.author
+        all_bdays = await get_all_birthdays()
+        bday = next((b for b in all_bdays if b["user_id"] == str(member.id)), None)
+        if not bday:
+            await ctx.send(f"❌ No birthday registered for **{member.display_name}**.")
+            return
+        today = date.today()
+        bday_this_year = date(today.year, bday["month"], bday["day"])
+        if bday_this_year < today:
+            bday_this_year = date(today.year + 1, bday["month"], bday["day"])
+        days_away = (bday_this_year - today).days
+        age_str = f" (turns **{today.year - bday['year']}**)" if bday.get("year") else ""
+        if days_away == 0:
+            await ctx.send(f"🎂 **{member.display_name}**'s birthday is **TODAY!** {age_str}")
+        else:
+            await ctx.send(
+                f"📅 **{member.display_name}**'s birthday: **{bday['day']:02d}/{bday['month']:02d}**{age_str} — in **{days_away}** days."
+            )
+
+    @commands.command(name="birthdays")
+    async def birthdays(self, ctx):
+        """!birthdays — list all upcoming birthdays"""
+        all_bdays = await get_all_birthdays()
+        embed = make_upcoming_embed(all_bdays)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="nextbirthday")
+    async def nextbirthday(self, ctx):
+        """!nextbirthday — who's birthday is coming up next"""
+        all_bdays = await get_all_birthdays()
+        if not all_bdays:
+            await ctx.send("❌ No birthdays registered yet!")
+            return
+        today = date.today()
+        upcoming = []
+        for b in all_bdays:
+            bday = date(today.year, b["month"], b["day"])
+            if bday < today:
+                bday = date(today.year + 1, b["month"], b["day"])
+            days_away = (bday - today).days
+            upcoming.append((days_away, b))
+        upcoming.sort(key=lambda x: x[0])
+        days_away, next_b = upcoming[0]
+        if days_away == 0:
+            await ctx.send(f"🎂 **{next_b['username']}**'s birthday is **TODAY!**")
+        else:
+            await ctx.send(
+                f"🎉 Next birthday: **{next_b['username']}** on "
+                f"**{next_b['day']:02d}/{next_b['month']:02d}** — in **{days_away}** days!"
+            )
+
+    @commands.command(name="wish")
+    async def wish(self, ctx, member: discord.Member, *, message: str = "Happy birthday! 🎉"):
+        """!wish @user <message> — send a birthday wish"""
+        if member.id == ctx.author.id:
+            await ctx.send("❌ You can't wish yourself happy birthday! 😄")
+            return
+        all_bdays = await get_all_birthdays()
+        bday = next((b for b in all_bdays if b["user_id"] == str(member.id)), None)
+        if not bday:
+            await ctx.send(f"❌ **{member.display_name}** hasn't registered a birthday!")
+            return
+        today = date.today()
+        if not (bday["day"] == today.day and bday["month"] == today.month):
+            await ctx.send(f"❌ It's not **{member.display_name}**'s birthday today!")
+            return
+        await add_wish(str(member.id), str(ctx.author.id), ctx.author.display_name, message)
+        confirm = await ctx.send(f"✅ Wish sent to **{member.display_name}**! 🎂")
+        await asyncio.sleep(5)
+        await confirm.delete()
+        await ctx.message.delete()
+        channel = self.bot.get_channel(self.birthday_channel_id)
+        if channel:
             wishes = await get_wishes_today(str(member.id))
-            embed = make_birthday_embed(member, bday, wishes)
-            channel = self.client.get_channel(self.birthday_channel_id)
-            if channel:
-                await channel.send("@everyone", embed=embed)
-                await mark_announced(str(member.id), datetime.now(timezone.utc).year)
-                await ctx.send(f"✅ Birthday announced for **{member.display_name}**!")
+            updated_embed = make_birthday_embed(member, bday, wishes)
+            existing = await get_wish_message(str(member.id))
+            if existing:
+                try:
+                    existing_channel_id, existing_message_id = existing
+                    existing_channel = self.bot.get_channel(existing_channel_id)
+                    msg = await (existing_channel or channel).fetch_message(existing_message_id)
+                    await msg.edit(embed=updated_embed)
+                except Exception:
+                    sent = await channel.send(embed=updated_embed)
+                    await save_wish_message(str(member.id), channel.id, sent.id)
             else:
-                await ctx.send("❌ Birthday channel not found!")
+                sent = await channel.send(embed=updated_embed)
+                await save_wish_message(str(member.id), channel.id, sent.id)
 
-        @self.client.command(name="giverole")
-        async def giverole(ctx, member: discord.Member = None):
-            """!giverole @user — admin: give birthday role for testing"""
-            if not ctx.author.guild_permissions.administrator:
-                await ctx.send("❌ Admins only!")
-                return
-            member = member or ctx.author
-            await self._give_birthday_role(member)
-            await ctx.send(f"✅ Birthday role given to **{member.display_name}**!")
+    @commands.command(name="birthdaytest")
+    async def birthdaytest(self, ctx):
+        """!birthdaytest — admin: preview birthday embed for yourself"""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Admins only!")
+            return
+        fake_bday = {
+            "user_id": str(ctx.author.id),
+            "username": ctx.author.display_name,
+            "day": date.today().day,
+            "month": date.today().month,
+            "year": 1990,
+        }
+        embed = make_birthday_embed(ctx.author, fake_bday, [])
+        await ctx.send("🧪 Test birthday announcement:", embed=embed)
 
-        @self.client.command(name="removerole")
-        async def removerole(ctx, member: discord.Member = None):
-            """!removerole @user — admin: manually remove birthday role"""
-            if not ctx.author.guild_permissions.administrator:
-                await ctx.send("❌ Admins only!")
-                return
-            member = member or ctx.author
-            role = discord.utils.get(member.guild.roles, name=self.birthday_role_name)
-            if not role:
-                await ctx.send(f"❌ Role '{self.birthday_role_name}' not found!")
-                return
-            await member.remove_roles(role)
-            await ctx.send(f"✅ Birthday role removed from **{member.display_name}**!")
+    @commands.command(name="birthdayforce")
+    async def birthdayforce(self, ctx, member: discord.Member):
+        """!birthdayforce @user — admin: force full birthday announcement for any user"""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Admins only!")
+            return
+        all_bdays = await get_all_birthdays()
+        bday = next((b for b in all_bdays if b["user_id"] == str(member.id)), None)
+        if not bday:
+            await ctx.send(f"❌ No birthday registered for **{member.display_name}**!")
+            return
+        await self._give_birthday_role(member)
+        wishes = await get_wishes_today(str(member.id))
+        embed = make_birthday_embed(member, bday, wishes)
+        channel = self.bot.get_channel(self.birthday_channel_id)
+        if channel:
+            sent = await channel.send("@everyone", embed=embed)
+            await save_wish_message(str(member.id), channel.id, sent.id)
+            await mark_announced(str(member.id), datetime.now(timezone.utc).year)
+            await ctx.send(f"✅ Birthday announced for **{member.display_name}**!")
+        else:
+            await ctx.send("❌ Birthday channel not found!")
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Lifecycle
-    # ─────────────────────────────────────────────────────────────────────────
+    @commands.command(name="giverole")
+    async def giverole(self, ctx, member: discord.Member = None):
+        """!giverole @user — admin: give birthday role for testing"""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Admins only!")
+            return
+        member = member or ctx.author
+        await self._give_birthday_role(member)
+        await ctx.send(f"✅ Birthday role given to **{member.display_name}**!")
 
-    async def on_ready(self):
-        logger.info(f"✅ Birthday bot connected as {self.client.user}")
-        self.daily_birthday_check.start()
-        self.midnight_role_cleanup.start()
+    @commands.command(name="removerole")
+    async def removerole(self, ctx, member: discord.Member = None):
+        """!removerole @user — admin: manually remove birthday role"""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Admins only!")
+            return
+        member = member or ctx.author
+        role = discord.utils.get(member.guild.roles, name=self.birthday_role_name)
+        if not role:
+            await ctx.send(f"❌ Role '{self.birthday_role_name}' not found!")
+            return
+        await member.remove_roles(role)
+        await ctx.send(f"✅ Birthday role removed from **{member.display_name}**!")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Loops
@@ -546,7 +589,7 @@ class BirthdayBot:
             logger.info("No birthdays today.")
             return
 
-        channel = self.client.get_channel(self.birthday_channel_id)
+        channel = self.bot.get_channel(self.birthday_channel_id)
         if not channel:
             logger.error(f"❌ Birthday channel not found: {self.birthday_channel_id}")
             return
@@ -556,7 +599,7 @@ class BirthdayBot:
                 continue
 
             member = None
-            for guild in self.client.guilds:
+            for guild in self.bot.guilds:
                 member = guild.get_member(int(bday["user_id"]))
                 if member:
                     break
@@ -568,9 +611,14 @@ class BirthdayBot:
             await self._give_birthday_role(member)
             wishes = await get_wishes_today(bday["user_id"])
             embed = make_birthday_embed(member, bday, wishes)
-            await channel.send("@everyone", embed=embed)
+            sent = await channel.send("@everyone", embed=embed)
+            await save_wish_message(bday["user_id"], channel.id, sent.id)
             await mark_announced(bday["user_id"], now.year)
             logger.info(f"🎂 Posted birthday for {member.display_name}")
+
+    @daily_birthday_check.before_loop
+    async def before_daily_birthday_check(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(hours=1)
     async def midnight_role_cleanup(self):
@@ -579,7 +627,7 @@ class BirthdayBot:
         if now.hour != 0:
             return
 
-        for guild in self.client.guilds:
+        for guild in self.bot.guilds:
             role = discord.utils.get(guild.roles, name=self.birthday_role_name)
             if not role:
                 continue
@@ -590,6 +638,10 @@ class BirthdayBot:
                         logger.info(f"🎂 Removed birthday role from {member.display_name}")
                     except Exception as e:
                         logger.warning(f"⚠️ Could not remove role from {member.display_name}: {e}")
+
+    @midnight_role_cleanup.before_loop
+    async def before_midnight_role_cleanup(self):
+        await self.bot.wait_until_ready()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Helpers
@@ -612,7 +664,7 @@ class BirthdayBot:
 
     async def check_pubg_birthday_dinner(self, match: dict):
         """
-        Call this from bot.py after posting a PUBG match embed.
+        Called by PUBGCog after posting a chicken dinner match embed.
         If a winner is having their birthday today, posts the special embed.
         """
         if not self.pubg_channel_id:
@@ -631,72 +683,18 @@ class BirthdayBot:
         for winner in winners:
             if winner.lower() not in today_names:
                 continue
-            for guild in self.client.guilds:
+            for guild in self.bot.guilds:
                 member = discord.utils.find(
                     lambda m: m.display_name.lower() == winner.lower(), guild.members
                 )
                 if member:
-                    channel = self.client.get_channel(self.pubg_channel_id)
+                    channel = self.bot.get_channel(self.pubg_channel_id)
                     if channel:
                         embed = make_pubg_birthday_dinner_embed(member, match)
                         await channel.send(embed=embed)
                         logger.info(f"🎂🍗 Birthday dinner posted for {winner}!")
                     break
 
-    def run(self):
-        self.client.run(self.token)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
-birthday_bot_instance: Optional[BirthdayBot] = None
-
-
-def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] [%(levelname)-8s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    import json
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass
-
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-    with open(config_path) as f:
-        config = json.load(f)
-
-    token            = os.getenv("DISCORD_TOKEN") or config.get("discord_token")
-    birthday_channel = config.get("birthday_channel_id", 0)
-    pubg_channel     = config.get("pubg_channel_id", 0)
-    announce_hour    = config.get("birthday_announce_hour_utc", 8)
-    role_name        = config.get("birthday_role_name", "🎂 Birthday")
-
-    if not token:
-        print("❌ No Discord token found!")
-        return
-    if not birthday_channel:
-        print("❌ Set birthday_channel_id in config.json!")
-        return
-
-    asyncio.run(init_db())
-
-    global birthday_bot_instance
-    birthday_bot_instance = BirthdayBot(
-        token=token,
-        birthday_channel_id=birthday_channel,
-        birthday_role_name=role_name,
-        announce_hour_utc=announce_hour,
-        pubg_channel_id=pubg_channel,
-    )
-    birthday_bot_instance.run()
-
-
-if __name__ == "__main__":
-    main()
+async def setup(bot: commands.Bot, **kwargs):
+    await bot.add_cog(BirthdayCog(bot, **kwargs))

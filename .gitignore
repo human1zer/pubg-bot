@@ -22,3 +22,6 @@ pubg_matches_enhanced.json
 match_history.json
 posted_matches.json
 config.json
+
+# Backups
+*.bak

@@ -278,35 +278,35 @@ class AsyncPUBGMatchTracker:
                     survival_minutes = round(survival_seconds / 60, 2)
                     
                     return {
-    "rank": stats.get('winPlace', 'N/A'),
-    "kills": stats.get('kills', 0),
-    "damage_dealt": round(stats.get('damageDealt', 0), 2),
-    "assists": stats.get('assists', 0),
-    "dbnos": stats.get('DBNOs', 0),
-    "headshot_kills": stats.get('headshotKills', 0),
-    "longest_kill": round(stats.get('longestKill', 0), 2),
-    "revives": stats.get('revives', 0),
-    "revives_received": stats.get('revivedCount', 0),
-    "team_kills": stats.get('teamKills', 0),
-    "vehicle_destroys": stats.get('vehicleDestroys', 0),
-    "weapons_acquired": stats.get('weaponsAcquired', 0),
-    "boosts_used": stats.get('boosts', 0),
-    "heals_used": stats.get('heals', 0),
-    "walk_distance": round(stats.get('walkDistance', 0), 2),
-    "ride_distance": round(stats.get('rideDistance', 0), 2),
-    "swim_distance": round(stats.get('swimDistance', 0), 2),
-    "survival_time_minutes": survival_minutes,
-    "death_type": stats.get('deathType', 'N/A'),
-    "kill_streaks": stats.get('killStreaks', 0),
-    "road_kills": stats.get('roadKills', 0)
-}
+                        "rank": stats.get('winPlace', 'N/A'),
+                        "kills": stats.get('kills', 0),
+                        "damage_dealt": round(stats.get('damageDealt', 0), 2),
+                        "assists": stats.get('assists', 0),
+                        "dbnos": stats.get('DBNOs', 0),
+                        "headshot_kills": stats.get('headshotKills', 0),
+                        "longest_kill": round(stats.get('longestKill', 0), 2),
+                        "revives": stats.get('revives', 0),
+                        "revives_received": stats.get('revivedCount', 0),
+                        "team_kills": stats.get('teamKills', 0),
+                        "vehicle_destroys": stats.get('vehicleDestroys', 0),
+                        "weapons_acquired": stats.get('weaponsAcquired', 0),
+                        "boosts_used": stats.get('boosts', 0),
+                        "heals_used": stats.get('heals', 0),
+                        "walk_distance": round(stats.get('walkDistance', 0), 2),
+                        "ride_distance": round(stats.get('rideDistance', 0), 2),
+                        "swim_distance": round(stats.get('swimDistance', 0), 2),
+                        "survival_time_minutes": survival_minutes,
+                        "death_type": stats.get('deathType', 'N/A'),
+                        "kill_streaks": stats.get('killStreaks', 0),
+                        "road_kills": stats.get('roadKills', 0)
+                    }
         return None
     
     def format_datetime(self, datetime_str: str) -> str:
         try:
             dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
             return dt.strftime('%Y-%m-%d %H:%M:%S UTC')
-        except:
+        except Exception:
             return datetime_str
     
     def print_cycle_summary(self, cycle_number: int):

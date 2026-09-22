@@ -27,23 +27,6 @@ class WeeklyStatsManager:
         # max_history is kept for API compatibility but is enforced in database.py
         self.max_history = max_history
 
-    # ── Write path ───────────────────────────────────────────────────────────
-
-    def save_match_history(self, new_matches: list) -> None:
-        """
-        Synchronous wrapper used by bot.py (called from a non-async context).
-        Spawns a new event loop if necessary.
-        """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're inside an async context — schedule as a task
-                asyncio.ensure_future(db.save_match_history(new_matches))
-            else:
-                loop.run_until_complete(db.save_match_history(new_matches))
-        except RuntimeError:
-            asyncio.run(db.save_match_history(new_matches))
-
     # ── Read path ────────────────────────────────────────────────────────────
 
     def calculate_weekly_best(self, days: int = 7) -> Optional[dict]:

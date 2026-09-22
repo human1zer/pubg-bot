@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,20 @@ CREATE TABLE IF NOT EXISTS posted_matches (
 );
 """
 
+_CREATE_STATE = """
+CREATE TABLE IF NOT EXISTS bot_state (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+"""
+
+_CREATE_POSTED_SHAME = """
+CREATE TABLE IF NOT EXISTS posted_shame_events (
+    event_id    TEXT PRIMARY KEY,
+    posted_at   TEXT NOT NULL
+);
+"""
+
 _CREATE_IDX_PLAYER  = "CREATE INDEX IF NOT EXISTS idx_matches_player   ON matches(player_name);"
 _CREATE_IDX_PLAYED  = "CREATE INDEX IF NOT EXISTS idx_matches_played   ON matches(played_at);"
 _CREATE_IDX_CATEGORY= "CREATE INDEX IF NOT EXISTS idx_matches_category ON matches(match_category);"
@@ -88,11 +102,34 @@ async def init_db(path: str = DB_PATH) -> None:
     async with aiosqlite.connect(path) as db:
         await db.execute(_CREATE_MATCHES)
         await db.execute(_CREATE_POSTED)
+        await db.execute(_CREATE_STATE)
+        await db.execute(_CREATE_POSTED_SHAME)
         await db.execute(_CREATE_IDX_PLAYER)
         await db.execute(_CREATE_IDX_PLAYED)
         await db.execute(_CREATE_IDX_CATEGORY)
         await db.commit()
     logger.info(f"✅ Database ready: {path}")
+
+
+# ── Small key/value state store (e.g. "last weekly summary posted") ─────────
+
+async def get_state(key: str, path: str = DB_PATH) -> Optional[str]:
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute("SELECT value FROM bot_state WHERE key = ?;", (key,))
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def set_state(key: str, value: str, path: str = DB_PATH) -> None:
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            """
+            INSERT INTO bot_state (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """,
+            (key, value),
+        )
+        await db.commit()
 
 
 # ── Posted-match deduplication ───────────────────────────────────────────────
@@ -332,7 +369,131 @@ async def get_alltime_longest_kills(top_n: int = 10, path: str = DB_PATH) -> Lis
             (top_n,)
         )
         rows = await cursor.fetchall()
-    return [dict(r) for r in rows]    
+    return [dict(r) for r in rows]
 
 
-    
+# ─────────────────────────────────────────────────────────────────────────────
+# Wall of Shame
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def get_shame_stats(days: int = 7, path: str = DB_PATH) -> Dict[str, dict]:
+    """
+    Aggregate per-player shame stats over the last `days`, same
+    CASUAL/ARCADE/AIROYALE exclusion as get_matches_since().
+
+    Player names are folded case-insensitively (players.txt has both
+    "Hasibfit" and "hasibfit") — the casing from the most recent match
+    is used as the display name.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT player_name, played_at, death_type, team_kills, road_kills, kills
+            FROM matches
+            WHERE played_at >= ?
+              AND UPPER(match_category) NOT IN ('CASUAL', 'ARCADE')
+              AND UPPER(match_category) NOT LIKE '%AIROYALE%';
+            """,
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+
+    players: Dict[str, dict] = {}
+    for r in rows:
+        key = r["player_name"].lower()
+        p = players.get(key)
+        if p is None:
+            p = players[key] = {
+                "display_name": r["player_name"],
+                "_latest_played_at": r["played_at"],
+                "matches": 0,
+                "suicides": 0,
+                "team_kills": 0,
+                "road_kills": 0,
+                "byzone_deaths": 0,
+                "logouts": 0,
+                "kills": 0,
+                "deaths": 0,
+            }
+        if r["played_at"] >= p["_latest_played_at"]:
+            p["_latest_played_at"] = r["played_at"]
+            p["display_name"] = r["player_name"]
+
+        p["matches"]    += 1
+        p["kills"]      += r["kills"] or 0
+        p["team_kills"] += r["team_kills"] or 0
+        p["road_kills"] += r["road_kills"] or 0
+
+        death_type = r["death_type"]
+        if death_type == "suicide":
+            p["suicides"] += 1
+        elif death_type == "byzone":
+            p["byzone_deaths"] += 1
+        elif death_type == "logout":
+            p["logouts"] += 1
+        if death_type != "alive":
+            p["deaths"] += 1
+
+    return players
+
+
+async def get_shame_candidate_rows(days: int = 3, path: str = DB_PATH) -> List[dict]:
+    """
+    Raw match rows from the last `days` that are shame-worthy: a suicide,
+    a blue-zone death, a logout, a teamkill, or a roadkill. Feeds the
+    weekly digest lines posted alongside the Wall of Shame board. Same
+    CASUAL/ARCADE/AIROYALE exclusion.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT id, player_name, played_at, death_type, team_kills, road_kills
+            FROM matches
+            WHERE played_at >= ?
+              AND UPPER(match_category) NOT IN ('CASUAL', 'ARCADE')
+              AND UPPER(match_category) NOT LIKE '%AIROYALE%'
+              AND (
+                    death_type IN ('suicide', 'byzone', 'logout')
+                 OR team_kills > 0
+                 OR road_kills > 0
+              )
+            ORDER BY played_at DESC;
+            """,
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Shame-digest deduplication (mirrors posted_matches) ──────────────────────
+
+async def load_posted_shame_events(path: str = DB_PATH) -> Set[str]:
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute("SELECT event_id FROM posted_shame_events;")
+        rows = await cursor.fetchall()
+    return {row[0] for row in rows}
+
+
+async def save_posted_shame_events(event_ids: Set[str], max_history: int = 2000, path: str = DB_PATH) -> None:
+    if not event_ids:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO posted_shame_events (event_id, posted_at) VALUES (?, ?);",
+            [(eid, now) for eid in event_ids],
+        )
+        await db.execute(
+            """
+            DELETE FROM posted_shame_events WHERE event_id NOT IN (
+                SELECT event_id FROM posted_shame_events
+                ORDER BY posted_at DESC LIMIT ?
+            );
+            """,
+            (max_history,),
+        )
+        await db.commit()

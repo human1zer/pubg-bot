@@ -1,18 +1,15 @@
 import asyncio
-import json
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
-# ── .env support ─────────────────────────────────────────────────────────────
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv not installed — fall back to config.json only
+import discord
+from discord.ext import commands
 
-from bot import IntegratedPUBGBot
 import database as db
+from config import load_config
+from bot import setup as setup_pubg_cog
+from birthday_bot import setup as setup_birthday_cog
 
 # Setup logging
 logging.basicConfig(
@@ -50,84 +47,93 @@ def load_players_from_file(filename: str = "players.txt") -> List[Tuple[str, str
     return players
 
 
-def load_config(filename: str = "config.json") -> Optional[dict]:
-    if not os.path.exists(filename):
-        logger.warning(f"⚠️ '{filename}' not found. Creating default config...")
-        default_config = {
-            # Secrets — prefer .env; these are fallback placeholders
-            "pubg_api_key":          "YOUR_PUBG_API_KEY_HERE",
-            "discord_token":         "YOUR_DISCORD_BOT_TOKEN_HERE",
-            # Channel IDs
-            "discord_channel_id":    123456789012345678,
-            "weekly_channel_id":     123456789012345678,
-            # Timing
-            "check_interval_seconds": 150,
-            "request_delay":          9.0,
-            "max_retries":            2,
-            # Optional: role ID to ping on chicken dinner (0 = disabled)
-            "winner_role_id":         0,
-            # How many posted match IDs to keep in the database
-            "posted_matches_max_history": 500,
-        }
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(default_config, f, indent=2)
-        logger.info(f"✅ Created '{filename}'")
-
-        print("\n📝 Setup Instructions:")
-        print("\n=== Recommended: use .env for secrets ===")
-        print("  Copy .env.example → .env and fill in PUBG_API_KEY and DISCORD_TOKEN")
-        print("\n=== Or set them in config.json ===")
-        print("  1. Get PUBG key from:  https://developer.pubg.com/")
-        print("  2. Get Discord token:  https://discord.com/developers/applications")
-        print("  3. Enable 'Message Content Intent' in the Bot settings")
-        print("  4. Set discord_channel_id to the channel you want posts in")
-        return None
-
-    with open(filename, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
+    channel_id         = config.get("discord_channel_id")
+    weekly_channel_id  = config.get("weekly_channel_id", channel_id)
+    winner_channel_id  = config.get("winner_channel_id", channel_id)
+    check_interval     = config.get("check_interval_seconds", 150)
+    request_delay      = config.get("request_delay", 7.0)
+    max_retries        = config.get("max_retries", 3)
+    winner_role_id     = config.get("winner_role_id", 0)
+    posted_max         = config.get("posted_matches_max_history", 500)
+    shame_dry_run       = config.get("shame_dry_run", False)
+    shame_top_n          = config.get("shame_top_n", 5)
+    weekly_post_day      = config.get("weekly_post_day", 6)
+    weekly_post_hour     = config.get("weekly_post_hour", 18)
+    weekly_post_timezone = config.get("weekly_post_timezone", "Europe/Oslo")
+
+    birthday_channel_id = config.get("birthday_channel_id", 0)
+    birthday_role_name  = config.get("birthday_role_name", "🎂 Birthday")
+    announce_hour_utc   = config.get("birthday_announce_hour_utc", 8)
+    pubg_channel_id     = config.get("pubg_channel_id", 0)
+
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.members = True
+    bot = commands.Bot(command_prefix="!", intents=intents)
+
+    async with bot:
+        await setup_pubg_cog(
+            bot,
+            channel_id=channel_id,
+            api_key=config["pubg_api_key"],
+            players=players,
+            check_interval=check_interval,
+            request_delay=request_delay,
+            max_retries=max_retries,
+            weekly_channel_id=weekly_channel_id,
+            winner_role_id=winner_role_id,
+            winner_channel_id=winner_channel_id,
+            posted_matches_max_history=posted_max,
+            shame_dry_run=shame_dry_run,
+            shame_top_n=shame_top_n,
+            weekly_post_day=weekly_post_day,
+            weekly_post_hour=weekly_post_hour,
+            weekly_post_timezone=weekly_post_timezone,
+        )
+        if birthday_channel_id:
+            await setup_birthday_cog(
+                bot,
+                birthday_channel_id=birthday_channel_id,
+                birthday_role_name=birthday_role_name,
+                announce_hour_utc=announce_hour_utc,
+                pubg_channel_id=pubg_channel_id,
+            )
+        else:
+            logger.warning("⚠️ birthday_channel_id not set — birthday bot disabled.")
+
+        await bot.start(config["discord_token"])
+
+
 def main():
     print("=" * 80)
-    print("PUBG INTEGRATED TRACKER & DISCORD BOT v3.0")
+    print("PUBG + BIRTHDAY DISCORD BOT")
     print("=" * 80)
-    print(" ✅ Async architecture")
-    print(" ✅ SQLite match history  (replaces match_history.json)")
-    print(" ✅ SQLite posted-matches (replaces posted_matches.json)")
+    print(" ✅ Single bot process — PUBG + Birthday cogs share one client")
+    print(" ✅ SQLite match history & posted-matches")
     print(" ✅ .env secret support   (PUBG_API_KEY / DISCORD_TOKEN)")
-    print(" ✅ Configurable posted_matches cap")
-    print(" ✅ Fixed polling loop    (tasks.loop interval)")
+    print(" ✅ Restart-safe weekly summary posting")
     print(" ✅ Chicken dinner alerts with optional role ping")
-    print(" ✅ !best command — all-time personal records")
+    print(" ✅ Birthday × PUBG crossover (chicken dinner on your birthday)")
     print("=" * 80 + "\n")
 
     config = load_config()
     if not config:
         return
 
-    # ── Secrets: .env wins over config.json ──────────────────────────────────
-    pubg_api_key  = os.getenv("PUBG_API_KEY")  or config.get("pubg_api_key", "")
-    discord_token = os.getenv("DISCORD_TOKEN") or config.get("discord_token", "")
-
-    channel_id        = config.get("discord_channel_id")
-    weekly_channel_id = config.get("weekly_channel_id", channel_id)
-    check_interval    = config.get("check_interval_seconds", 150)
-    request_delay     = config.get("request_delay", 7.0)
-    max_retries       = config.get("max_retries", 3)
-    winner_role_id    = config.get("winner_role_id", 0)
-    posted_max        = config.get("posted_matches_max_history", 500)
+    channel_id = config.get("discord_channel_id")
 
     # ── Validate ─────────────────────────────────────────────────────────────
-    if not pubg_api_key or pubg_api_key == "YOUR_PUBG_API_KEY_HERE":
+    if not config["pubg_api_key"] or config["pubg_api_key"] == "YOUR_PUBG_API_KEY_HERE":
         logger.error("❌ PUBG API key not set.  Add it to .env (PUBG_API_KEY) or config.json.")
         logger.info("   Get your key from: https://developer.pubg.com/")
         return
 
-    if not discord_token or discord_token == "YOUR_DISCORD_BOT_TOKEN_HERE":
+    if not config["discord_token"] or config["discord_token"] == "YOUR_DISCORD_BOT_TOKEN_HERE":
         logger.error("❌ Discord token not set.  Add it to .env (DISCORD_TOKEN) or config.json.")
         return
 
@@ -135,9 +141,10 @@ def main():
         logger.error("❌ Please set discord_channel_id in config.json.")
         return
 
+    check_interval = config.get("check_interval_seconds", 150)
+    request_delay  = config.get("request_delay", 7.0)
     if check_interval < 60:
         logger.warning("⚠️ check_interval_seconds < 60 — you may hit PUBG API rate limits!")
-
     if request_delay < 6:
         logger.warning("⚠️ request_delay < 6s — you may hit PUBG API rate limits!")
 
@@ -159,30 +166,14 @@ def main():
     logger.info(f"  Check interval:       {check_interval}s ({check_interval / 60:.1f} min)")
     logger.info(f"  Request delay:        {request_delay}s")
     logger.info(f"  Discord channel:      {channel_id}")
-    logger.info(f"  Posted-match cap:     {posted_max}")
-    logger.info(f"  Winner role ping:     {'disabled' if not winner_role_id else f'<@&{winner_role_id}>'}")
     logger.info(f"\n🚀 Starting bot… (Ctrl+C to stop)\n")
 
-    bot = IntegratedPUBGBot(
-        discord_token=discord_token,
-        channel_id=channel_id,
-        api_key=pubg_api_key,
-        players=players,
-        check_interval=check_interval,
-        request_delay=request_delay,
-        max_retries=max_retries,
-        weekly_channel_id=weekly_channel_id,
-        winner_role_id=winner_role_id,
-        posted_matches_max_history=posted_max,
-    )
-
     try:
-        bot.run()
+        asyncio.run(run_bot(config, players))
     except KeyboardInterrupt:
         print("\n\n" + "=" * 80)
         print("⛔ STOPPED BY USER")
         print("=" * 80)
-        print(f"Total cycles completed: {bot.cycle_number - 1}")
         print("✅ Bot stopped successfully!")
 
 
