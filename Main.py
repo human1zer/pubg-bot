@@ -10,6 +10,7 @@ import database as db
 from config import load_config
 from bot import setup as setup_pubg_cog
 from birthday_bot import setup as setup_birthday_cog
+from song_bot import setup as setup_song_cog
 
 # Setup logging
 logging.basicConfig(
@@ -71,6 +72,10 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
     announce_hour_utc   = config.get("birthday_announce_hour_utc", 8)
     pubg_channel_id     = config.get("pubg_channel_id", 0)
 
+    song_channel_id     = config.get("song_channel_id", 0)
+    song_post_day       = config.get("song_post_day", 4)
+    song_post_hour      = config.get("song_post_hour", 20)
+
     intents = discord.Intents.default()
     intents.message_content = True
     intents.members = True
@@ -105,6 +110,17 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
             )
         else:
             logger.warning("⚠️ birthday_channel_id not set — birthday bot disabled.")
+
+        if song_channel_id:
+            await setup_song_cog(
+                bot,
+                channel_id=song_channel_id,
+                post_day=song_post_day,
+                post_hour=song_post_hour,
+                timezone=weekly_post_timezone,
+            )
+        else:
+            logger.warning("⚠️ song_channel_id not set — Song Check disabled.")
 
         await bot.start(config["discord_token"])
 

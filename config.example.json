@@ -1,26 +1,24 @@
 {
   "pubg_api_key": "YOUR_PUBG_API_KEY_HERE",
   "discord_token": "YOUR_DISCORD_BOT_TOKEN_HERE",
-
   "discord_channel_id": 0,
   "weekly_channel_id": 0,
   "winner_channel_id": 0,
-
   "shame_dry_run": false,
   "shame_top_n": 5,
   "weekly_post_day": 6,
   "weekly_post_hour": 18,
   "weekly_post_timezone": "Europe/Oslo",
-
   "check_interval_seconds": 150,
   "request_delay": 9.0,
   "max_retries": 2,
-
   "winner_role_id": 0,
   "posted_matches_max_history": 500,
-
   "birthday_channel_id": 0,
   "birthday_announce_hour_utc": 8,
   "birthday_role_name": "🎂 Birthday",
-  "pubg_channel_id": 0
+  "pubg_channel_id": 0,
+  "song_channel_id": 0,
+  "song_post_day": 4,
+  "song_post_hour": 20
 }
