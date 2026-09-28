@@ -32,7 +32,10 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 - PUBG crossover — if a tracked player gets a chicken dinner on their birthday, posts a special combined embed 🎂🍗
 
 ### Ask
-- `!ask <question>` — answered by a local LLM via [Ollama](https://ollama.com) with a sarcastic, roasting persona (max 2 sentences, same language as the question)
+- `!ask <question>` — answered by a local LLM via [Ollama](https://ollama.com), talking like one of the group (short, sarcastic, playful roasting, same language as the message)
+- Also answers when someone @mentions the bot or replies to one of its messages — same 20s per-user cooldown
+- Each answer sees the channel's last 20 messages plus the group lore
+- Group lore — every night the bot reads the last 24h from `lore_channel_ids` (skipping bots and commands), has the model extract short notes (nicknames, recurring topics, inside jokes, running gags) and merges them into `lore.md`: deduped, capped at `lore_max_tokens`, notes not seen for `lore_stale_days` are dropped. Raw messages are never stored; `lore.md` is gitignored
 - Model is unloaded from VRAM after `ask_keep_alive` of inactivity, so the GPU frees up between questions
 - If Ollama is down, the bot replies that its brain is offline instead of erroring
 
@@ -52,7 +55,8 @@ pubg-bot/
 ├── rivalry.py               # Cross-clan rivalry scanner — telemetry kills, clan lookups, rate-limit throttling
 ├── database.py              # Async SQLite layer (matches, posted match IDs, bot state)
 ├── birthday_bot.py          # BirthdayCog — birthday commands, daily announcement, PUBG crossover
-├── ask_bot.py               # AskCog — !ask, answered by a local Ollama model
+├── ask_bot.py               # AskCog — !ask / mentions / replies, answered by a local Ollama model; nightly lore job
+├── lore.py                  # Group lore — note extraction, merging, pruning, lore.md read/write
 ├── fetch_longest_kills.py   # Weekly job to seed all-time longest kills data from the PUBG API
 ├── scripts/
 │   └── clan_kill_scanner.py # Dry-run rivalry scan of one match with a skip-reason breakdown (debug, saves nothing)
@@ -153,6 +157,12 @@ DISCORD_TOKEN=your_discord_bot_token
 | `ask_model` | Ollama model for `!ask` — must already be pulled, e.g. `ollama pull llama3.2:3b` (default `llama3.2:3b`) |
 | `ask_keep_alive` | How long Ollama keeps the model loaded in VRAM after a question (default `5m`) |
 | `ask_system_prompt` | Persona / instructions for `!ask` answers |
+| `ask_guild_id` | Only answer `!ask`, mentions and replies in this server (0 = any server) |
+| `lore_channel_ids` | Channels the nightly lore job reads (empty = lore learning off) |
+| `lore_hour` | Local hour (in `weekly_post_timezone`) for the nightly lore job (default 4) |
+| `lore_stale_days` | Lore notes not seen in chat for this many days are dropped (default 30) |
+| `lore_max_tokens` | Size cap for the lore injected into prompts — oldest notes go first (default 1500) |
+| `lore_model` | Ollama model for the nightly lore job; empty = same as `ask_model`. A bigger model gives better notes and can be slow, it runs at night |
 
 ### 3. Discord bot setup
 
@@ -299,7 +309,10 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 
 | Command | Who | Description |
 |---|---|---|
-| `!ask <question>` | Anyone | Get a sarcastic answer from the local LLM (20s cooldown per user) |
+| `!ask <question>` | Anyone | Ask the bot something — also works by @mentioning it or replying to it (20s cooldown per user) |
+| `!lore` | Admin | DM you the current `lore.md` |
+| `!lorenow` | Admin | Run the nightly lore update right now (last 24h) |
+| `!loreclear` | Admin | Reset the lore (previous file kept as `lore.md.bak` on the server) |
 
 ---
 

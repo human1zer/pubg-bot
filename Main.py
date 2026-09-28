@@ -118,6 +118,12 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
     ask_model           = config.get("ask_model", "llama3.2:3b")
     ask_keep_alive      = config.get("ask_keep_alive", "5m")
     ask_system_prompt   = config.get("ask_system_prompt", DEFAULT_CONFIG["ask_system_prompt"])
+    ask_guild_id        = config.get("ask_guild_id", 0)
+    lore_channel_ids    = config.get("lore_channel_ids", [])
+    lore_hour           = config.get("lore_hour", 4)
+    lore_stale_days     = config.get("lore_stale_days", 30)
+    lore_max_tokens     = config.get("lore_max_tokens", 1500)
+    lore_model          = config.get("lore_model", "")
 
     intents = discord.Intents.default()
     intents.message_content = True
@@ -179,6 +185,13 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
             model=ask_model,
             system_prompt=ask_system_prompt,
             keep_alive=ask_keep_alive,
+            guild_id=ask_guild_id,
+            lore_channel_ids=lore_channel_ids,
+            lore_hour=lore_hour,
+            timezone=weekly_post_timezone,
+            lore_stale_days=lore_stale_days,
+            lore_max_tokens=lore_max_tokens,
+            lore_model=lore_model,
         )
 
         await bot.start(config["discord_token"])

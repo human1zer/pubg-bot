@@ -25,3 +25,7 @@ config.json
 
 # Backups
 *.bak
+
+# !ask group lore — notes about real people, keep local
+lore.md
+lore.tmp

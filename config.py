@@ -66,7 +66,15 @@ DEFAULT_CONFIG = {
     "ask_ollama_url":    "http://localhost:11434/api/chat",
     "ask_model":         "llama3.2:3b",
     "ask_keep_alive":    "5m",
-    "ask_system_prompt": "You are a sarcastic Discord bot in a PUBG clan server. Always answer with dry irony and mockery, max 2 sentences. Playful roasting, never hateful. Reply in the same language as the question.",
+    "ask_system_prompt": "You're a longtime member of this PUBG clan's Discord, hanging out in the group chat with your friends. Talk like one of the gang, not like an assistant: casual, short (1-2 sentences), dry sarcasm and playful roasting, never hateful. Use the group's nicknames, inside jokes and running gags when they fit naturally, don't force them. No \"how can I help\", no disclaimers, no lists. Only bring up gaming if the conversation is about gaming. Reply in the same language as the message.",
+    "ask_guild_id":      0,     # only answer in this server (0 = any server)
+    # Nightly lore learning: chat from these channels is distilled into lore.md
+    # at lore_hour (weekly_post_timezone). Empty list = disabled.
+    "lore_channel_ids":  [],
+    "lore_hour":         4,
+    "lore_stale_days":   30,    # notes not seen for this long are dropped
+    "lore_max_tokens":   1500,
+    "lore_model":        "",    # model for the nightly job ("" = same as ask_model)
 }
 
 
