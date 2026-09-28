@@ -48,6 +48,40 @@ def load_players_from_file(filename: str = "players.txt") -> List[Tuple[str, str
     return players
 
 
+async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    """Reply with a short error instead of failing silently. Details go to the log only."""
+    if isinstance(error, commands.CommandNotFound):
+        return   # typos / other bots' commands — stay quiet
+    if ctx.command and ctx.command.has_error_handler():
+        return
+    if ctx.cog and ctx.cog.has_error_handler():
+        return
+
+    usage = ""
+    if ctx.command:
+        usage = "`" + f"!{ctx.command.qualified_name} {ctx.command.signature}".rstrip() + "`"
+    if isinstance(error, commands.MissingRequiredArgument):
+        reply = f"❌ Missing `{error.param.name}`. Usage: {usage}"
+    elif isinstance(error, (commands.BadArgument, commands.BadUnionArgument)):
+        reply = f"❌ Invalid argument. Usage: {usage}"
+    elif isinstance(error, commands.NoPrivateMessage):
+        reply = "❌ That command only works in a server."
+    elif isinstance(error, commands.CheckFailure):
+        reply = "❌ You don't have permission to do that."
+    else:
+        original = getattr(error, "original", error)
+        logger.error(
+            f"❌ Command !{ctx.command} failed (invoked by {ctx.author}): {original!r}",
+            exc_info=(type(original), original, original.__traceback__),
+        )
+        reply = f"❌ Something went wrong running `!{ctx.command}`."
+
+    try:
+        await ctx.reply(reply, mention_author=False)
+    except discord.HTTPException:
+        logger.warning(f"⚠️ Couldn't send error reply for !{ctx.command}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +121,7 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
         intents=intents,
         allowed_mentions=discord.AllowedMentions(everyone=False),
     )
+    bot.add_listener(on_command_error)
 
     async with bot:
         await setup_pubg_cog(

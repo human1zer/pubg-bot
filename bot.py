@@ -10,7 +10,9 @@ from discord.ext import commands, tasks
 
 import database as db
 import shame
-from embeds import create_enhanced_match_embed, create_winner_embed
+from embeds import (
+    chunk_lines, create_enhanced_match_embed, create_winner_embed, paginate_embed, send_embeds,
+)
 from rivalry import WEEKLY_TOP_N, RivalryScanner, create_weekly_rivalry_embed
 from tracker import AsyncPUBGMatchTracker
 from weekly_stats import WeeklyStatsManager
@@ -174,19 +176,19 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
             description=f"Total: {len(self.players)}",
             color=discord.Color.blue(),
         )
-        lines = "\n".join(f"{i}. **{name}**" for i, (name, _) in enumerate(self.players, 1))
-        embed.add_field(name="Players", value=lines, inline=False)
-        await ctx.send(embed=embed)
+        lines = [f"{i}. **{name}**" for i, (name, _) in enumerate(self.players, 1)]
+        for n, chunk in enumerate(chunk_lines(lines)):
+            embed.add_field(name="Players" if n == 0 else "\u200b", value=chunk, inline=False)
+        await send_embeds(ctx, paginate_embed(embed))
 
     @commands.command(name="best")
     async def best(self, ctx):
         """Show all-time personal best records for every tracked player."""
-        rows = await db.get_all_time_best()
+        rows = await db.get_all_time_best([name for name, _ in self.players])
         if not rows:
             await ctx.send("⚠️ No match data in the database yet!")
             return
-        embed = self.stats_manager.create_best_embed(rows)
-        await ctx.send(embed=embed)
+        await send_embeds(ctx, self.stats_manager.create_best_embeds(rows))
 
     @commands.command(name="rivalry")
     async def rivalry_cmd(self, ctx, days: int = None):
@@ -531,7 +533,7 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
             logger.warning(f"⚠️ Skipped match {idx}/{total}: no player data")
             return
 
-        await channel.send(embed=embed)
+        await send_embeds(channel, paginate_embed(embed))
 
         # ── Chicken dinner alert ─────────────────────────────────────────────
         winners = [
@@ -544,7 +546,7 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
 
             winner_channel = self.bot.get_channel(self.winner_channel_id) or channel
 
-            await winner_channel.send(content=mention if mention else None, embed=winner_embed)
+            await send_embeds(winner_channel, paginate_embed(winner_embed), content=mention or None)
             logger.info(f"🏆 Chicken dinner alert posted for: {', '.join(winners)}")
 
             birthday_cog = self.bot.get_cog("BirthdayCog")

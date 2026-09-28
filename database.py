@@ -333,22 +333,31 @@ async def get_matches_since(days: int, path: str = DB_PATH) -> List[dict]:
     return [dict(r) for r in rows]
 
 
-async def get_all_time_best(path: str = DB_PATH) -> List[dict]:
+async def get_all_time_best(player_names: Optional[List[str]] = None, path: str = DB_PATH) -> List[dict]:
     """
     Return the single best stat row per player across all time
-    for the !best command:
+    for the !best command, limited to `player_names` (case-insensitive)
+    when given — so removed players drop off:
       - best_kills_game   (most kills in one match)
       - best_damage_game  (most damage in one match)
       - best_rank         (lowest finish rank)
       - longest_kill      (longest kill shot ever)
     """
+    name_filter, params = "", ()
+    if player_names is not None:
+        if not player_names:
+            return []
+        name_filter = f"AND LOWER(player_name) IN ({','.join('?' * len(player_names))})"
+        params = tuple(n.lower() for n in player_names)
+
     async with aiosqlite.connect(path) as db:
         db.row_factory = aiosqlite.Row
 
         cursor = await db.execute(
-            """
+            f"""
             SELECT
-                player_name,
+                LOWER(player_name)  AS name_key,
+                MAX(player_name)    AS player_name,
                 MAX(kills)          AS best_kills,
                 MAX(damage_dealt)   AS best_damage,
                 MIN(rank)           AS best_rank,
@@ -359,13 +368,22 @@ async def get_all_time_best(path: str = DB_PATH) -> List[dict]:
             FROM matches
             WHERE UPPER(match_category) NOT IN ('CASUAL', 'ARCADE')
               AND UPPER(match_category) NOT LIKE '%AIROYALE%'
-            GROUP BY player_name
+              {name_filter}
+            GROUP BY LOWER(player_name)
             ORDER BY total_kills DESC;
-            """
+            """,
+            params,
         )
         rows = await cursor.fetchall()
 
-    return [dict(r) for r in rows]
+    # Old rows may differ in capitalisation — show the tracked spelling
+    display = {n.lower(): n for n in (player_names or [])}
+    results = []
+    for r in rows:
+        row = dict(r)
+        row["player_name"] = display.get(row.pop("name_key"), row["player_name"])
+        results.append(row)
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────

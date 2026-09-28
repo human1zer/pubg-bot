@@ -11,11 +11,12 @@ import logging
 import os
 import traceback
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 import discord
 
 import database as db
+from embeds import paginate_embed
 
 logger = logging.getLogger(__name__)
 
@@ -289,10 +290,11 @@ class WeeklyStatsManager:
 
     # ── !best embed ──────────────────────────────────────────────────────────
 
-    def create_best_embed(self, rows: list) -> discord.Embed:
+    def create_best_embeds(self, rows: list) -> List[discord.Embed]:
         """
-        Build the !best embed from get_all_time_best() rows.
-        Shows each player's all-time personal records.
+        Build the !best embeds from get_all_time_best() rows.
+        Shows each player's all-time personal records — one field per
+        player, split across several embeds past Discord's 25-field limit.
         """
         embed = discord.Embed(
             title="🏅 All-Time Personal Bests",
@@ -332,7 +334,7 @@ class WeeklyStatsManager:
             )
 
         embed.set_footer(text="Across all tracked matches in the database")
-        return embed
+        return paginate_embed(embed)
 
     # ── Utility ──────────────────────────────────────────────────────────────
 

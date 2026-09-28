@@ -31,6 +31,8 @@ import aiosqlite
 import discord
 from discord.ext import commands, tasks
 
+from embeds import MAX_FIELD_VALUE
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "birthdays.db")
@@ -235,6 +237,28 @@ async def get_wish_message(birthday_user_id: str):
 # Embeds
 # ─────────────────────────────────────────────────────────────────────────────
 
+WISH_PREVIEW_CHARS = 150   # full wish stays in the DB; the embed shows a preview
+MAX_WISHES_SHOWN   = 10
+
+
+def format_wish_list(wishes: list) -> str:
+    """Wish lines for the birthday embed, kept under Discord's 1024-char field limit."""
+    budget = MAX_FIELD_VALUE - 20   # room for the "+N more" line
+    lines = []
+    for w in wishes[:MAX_WISHES_SHOWN]:
+        text = w["wish_text"]
+        if len(text) > WISH_PREVIEW_CHARS:
+            text = text[:WISH_PREVIEW_CHARS].rstrip() + "…"
+        line = f"💬 **{w['wisher_name']}**: {text}"
+        if len("\n".join(lines + [line])) > budget:
+            break
+        lines.append(line)
+    hidden = len(wishes) - len(lines)
+    if hidden:
+        lines.append(f"+{hidden} more")
+    return "\n".join(lines)
+
+
 def make_birthday_embed(member: discord.Member, birthday: dict, wishes: list) -> discord.Embed:
     age = None
     if birthday.get("year"):
@@ -262,10 +286,9 @@ def make_birthday_embed(member: discord.Member, birthday: dict, wishes: list) ->
     )
 
     if wishes:
-        wish_lines = [f"💬 **{w['wisher_name']}**: {w['wish_text']}" for w in wishes[:10]]
         embed.add_field(
             name=f"🥳 Wishes ({len(wishes)})",
-            value="\n".join(wish_lines),
+            value=format_wish_list(wishes),
             inline=False,
         )
 

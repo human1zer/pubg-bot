@@ -24,6 +24,87 @@ MAP_NAMES = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Discord size limits — splitting embeds that grow with the player count
+# ─────────────────────────────────────────────────────────────────────────────
+
+MAX_FIELDS             = 25
+MAX_FIELD_VALUE        = 1024
+MAX_EMBED_CHARS        = 6000   # per embed, and across all embeds in one message
+MAX_EMBEDS_PER_MESSAGE = 10
+
+
+def paginate_embed(embed: discord.Embed) -> List[discord.Embed]:
+    """
+    Split an embed that breaks Discord's field-count or total-size limit
+    into several. Title, description and thumbnail stay on the first page;
+    later pages are titled "(cont.)"; footer and timestamp go on the last.
+    Embeds within the limits are returned as-is.
+    """
+    if len(embed.fields) <= MAX_FIELDS and len(embed) <= MAX_EMBED_CHARS:
+        return [embed]
+
+    footer_text = embed.footer.text or ""
+
+    def new_page(first: bool) -> discord.Embed:
+        title = embed.title if first else (f"{embed.title} (cont.)" if embed.title else None)
+        page = discord.Embed(
+            title=title,
+            description=embed.description if first else None,
+            color=embed.color,
+        )
+        if first and embed.thumbnail.url:
+            page.set_thumbnail(url=embed.thumbnail.url)
+        return page
+
+    pages = [new_page(first=True)]
+    for field in embed.fields:
+        page = pages[-1]
+        needed = len(field.name) + len(field.value) + len(footer_text)
+        if page.fields and (len(page.fields) >= MAX_FIELDS or len(page) + needed > MAX_EMBED_CHARS):
+            page = new_page(first=False)
+            pages.append(page)
+        page.add_field(name=field.name, value=field.value, inline=field.inline)
+
+    if footer_text:
+        pages[-1].set_footer(text=footer_text, icon_url=embed.footer.icon_url)
+    if embed.timestamp:
+        pages[-1].timestamp = embed.timestamp
+    return pages
+
+
+async def send_embeds(destination, embeds: List[discord.Embed], **kwargs) -> None:
+    """
+    Send embeds back to back, packed into as few messages as Discord allows
+    (10 embeds and 6000 characters per message). Extra kwargs (e.g.
+    content=) go with the first message only.
+    """
+    batch, size = [], 0
+    for embed in embeds:
+        if batch and (len(batch) >= MAX_EMBEDS_PER_MESSAGE or size + len(embed) > MAX_EMBED_CHARS):
+            await destination.send(embeds=batch, **kwargs)
+            kwargs, batch, size = {}, [], 0
+        batch.append(embed)
+        size += len(embed)
+    if batch:
+        await destination.send(embeds=batch, **kwargs)
+
+
+def chunk_lines(lines: List[str], limit: int = MAX_FIELD_VALUE) -> List[str]:
+    """Join lines into as few newline-separated chunks of <= limit chars as possible."""
+    chunks, current = [], ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if current and len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Match embed (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
