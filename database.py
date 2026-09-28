@@ -9,6 +9,8 @@ Tables
 ------
 matches        — one row per (player, match), all tracked stats
 posted_matches — set of match IDs already posted to Discord
+player_cache / clan_cache / clan_kills / scanned_clan_matches
+               — cross-clan rivalry tracking (see rivalry.py)
 """
 
 import aiosqlite
@@ -92,6 +94,71 @@ _CREATE_IDX_PLAYER  = "CREATE INDEX IF NOT EXISTS idx_matches_player   ON matche
 _CREATE_IDX_PLAYED  = "CREATE INDEX IF NOT EXISTS idx_matches_played   ON matches(played_at);"
 _CREATE_IDX_CATEGORY= "CREATE INDEX IF NOT EXISTS idx_matches_category ON matches(match_category);"
 
+# ── Cross-clan rivalry (rivalry.py) ──────────────────────────────────────────
+
+# clan_id NULL = player has no clan (cached too, so we don't re-query them)
+_CREATE_PLAYER_CACHE = """
+CREATE TABLE IF NOT EXISTS player_cache (
+    account_id   TEXT PRIMARY KEY,          -- "account.xxxx"
+    name         TEXT NOT NULL,             -- most recent name seen
+    clan_id      TEXT,                      -- "clan.xxxx" or NULL
+    fetched_at   TEXT NOT NULL              -- ISO-8601 UTC, for TTL
+);
+"""
+
+_CREATE_CLAN_CACHE = """
+CREATE TABLE IF NOT EXISTS clan_cache (
+    clan_id      TEXT PRIMARY KEY,
+    clan_tag     TEXT,
+    clan_name    TEXT,
+    clan_level   INTEGER,
+    member_count INTEGER,
+    fetched_at   TEXT NOT NULL
+);
+"""
+
+# One row per cross-clan kill involving a tracked player. Clan IDs are a
+# snapshot at scan time, so history survives players switching clans.
+_CREATE_CLAN_KILLS = """
+CREATE TABLE IF NOT EXISTS clan_kills (
+    match_id           TEXT NOT NULL,
+    played_at          TEXT NOT NULL,
+    map                TEXT,
+    killer_account_id  TEXT NOT NULL,
+    killer_name        TEXT NOT NULL,
+    killer_clan_id     TEXT NOT NULL,
+    killer_tracked     INTEGER DEFAULT 0,
+    victim_account_id  TEXT NOT NULL,
+    victim_name        TEXT NOT NULL,
+    victim_clan_id     TEXT NOT NULL,
+    victim_tracked     INTEGER DEFAULT 0,
+    distance_m         REAL,
+    weapon             TEXT,               -- killerDamageInfo.damageCauserName
+    is_headshot        INTEGER DEFAULT 0,
+    PRIMARY KEY (match_id, victim_account_id)   -- one death per player per match
+);
+"""
+
+# Doubles as the rivalry work queue: rows start 'pending' and end 'done' or
+# 'failed', so queued scans survive a bot restart.
+_CREATE_SCANNED_CLAN = """
+CREATE TABLE IF NOT EXISTS scanned_clan_matches (
+    match_id       TEXT PRIMARY KEY,
+    played_at      TEXT NOT NULL,
+    map            TEXT,
+    telemetry_url  TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pending',   -- pending | done | failed
+    attempts       INTEGER DEFAULT 0,
+    queued_at      TEXT NOT NULL,
+    scanned_at     TEXT,
+    kills_found    INTEGER DEFAULT 0
+);
+"""
+
+_CREATE_IDX_CLAN_PAIR   = "CREATE INDEX IF NOT EXISTS idx_clan_kills_pair   ON clan_kills(killer_clan_id, victim_clan_id);"
+_CREATE_IDX_CLAN_PLAYED = "CREATE INDEX IF NOT EXISTS idx_clan_kills_played ON clan_kills(played_at);"
+_CREATE_IDX_CLAN_STATUS = "CREATE INDEX IF NOT EXISTS idx_scanned_clan_status ON scanned_clan_matches(status, queued_at);"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
@@ -107,6 +174,13 @@ async def init_db(path: str = DB_PATH) -> None:
         await db.execute(_CREATE_IDX_PLAYER)
         await db.execute(_CREATE_IDX_PLAYED)
         await db.execute(_CREATE_IDX_CATEGORY)
+        await db.execute(_CREATE_PLAYER_CACHE)
+        await db.execute(_CREATE_CLAN_CACHE)
+        await db.execute(_CREATE_CLAN_KILLS)
+        await db.execute(_CREATE_SCANNED_CLAN)
+        await db.execute(_CREATE_IDX_CLAN_PAIR)
+        await db.execute(_CREATE_IDX_CLAN_PLAYED)
+        await db.execute(_CREATE_IDX_CLAN_STATUS)
         await db.commit()
     logger.info(f"✅ Database ready: {path}")
 
@@ -497,3 +571,219 @@ async def save_posted_shame_events(event_ids: Set[str], max_history: int = 2000,
             (max_history,),
         )
         await db.commit()
+
+
+# ── Cross-clan rivalry: scan queue ───────────────────────────────────────────
+
+async def enqueue_clan_scan(
+    match_id: str, played_at: str, map_name: str, telemetry_url: str, path: str = DB_PATH
+) -> bool:
+    """Queue a match for rivalry scanning. Returns False if already known."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            """
+            INSERT OR IGNORE INTO scanned_clan_matches
+                (match_id, played_at, map, telemetry_url, queued_at)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (match_id, played_at, map_name, telemetry_url, now),
+        )
+        await db.commit()
+    return cursor.rowcount > 0
+
+
+async def next_pending_clan_scan(path: str = DB_PATH) -> Optional[dict]:
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT match_id, played_at, map, telemetry_url, attempts
+            FROM scanned_clan_matches
+            WHERE status = 'pending'
+            ORDER BY queued_at
+            LIMIT 1;
+            """
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def mark_clan_scan_done(match_id: str, kills_found: int, path: str = DB_PATH) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            """
+            UPDATE scanned_clan_matches
+            SET status = 'done', scanned_at = ?, kills_found = ?
+            WHERE match_id = ?;
+            """,
+            (now, kills_found, match_id),
+        )
+        await db.commit()
+
+
+async def mark_clan_scan_failed_attempt(match_id: str, max_attempts: int, path: str = DB_PATH) -> None:
+    """Bump the attempt counter; give up ('failed') after max_attempts."""
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            """
+            UPDATE scanned_clan_matches
+            SET attempts = attempts + 1,
+                status = CASE WHEN attempts + 1 >= ? THEN 'failed' ELSE 'pending' END
+            WHERE match_id = ?;
+            """,
+            (max_attempts, match_id),
+        )
+        await db.commit()
+
+
+# ── Cross-clan rivalry: player / clan cache ──────────────────────────────────
+
+async def get_cached_players(
+    account_ids: List[str], max_age_days: int, path: str = DB_PATH
+) -> Dict[str, Optional[str]]:
+    """account_id -> clan_id (or None) for cache entries younger than max_age_days."""
+    if not account_ids:
+        return {}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    placeholders = ",".join("?" * len(account_ids))
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            f"""
+            SELECT account_id, clan_id FROM player_cache
+            WHERE account_id IN ({placeholders}) AND fetched_at >= ?;
+            """,
+            (*account_ids, cutoff),
+        )
+        rows = await cursor.fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+async def upsert_cached_players(players: List[dict], path: str = DB_PATH) -> None:
+    """players: [{account_id, name, clan_id}]"""
+    if not players:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        await db.executemany(
+            """
+            INSERT INTO player_cache (account_id, name, clan_id, fetched_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                name = excluded.name,
+                clan_id = excluded.clan_id,
+                fetched_at = excluded.fetched_at;
+            """,
+            [(p["account_id"], p["name"], p["clan_id"], now) for p in players],
+        )
+        await db.commit()
+
+
+async def get_fresh_clan_ids(clan_ids: List[str], max_age_days: int, path: str = DB_PATH) -> Set[str]:
+    if not clan_ids:
+        return set()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    placeholders = ",".join("?" * len(clan_ids))
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            f"SELECT clan_id FROM clan_cache WHERE clan_id IN ({placeholders}) AND fetched_at >= ?;",
+            (*clan_ids, cutoff),
+        )
+        rows = await cursor.fetchall()
+    return {row[0] for row in rows}
+
+
+async def get_clan_tags(clan_ids: List[str], path: str = DB_PATH) -> Dict[str, str]:
+    """clan_id -> clan_tag for whatever is cached (any age)."""
+    if not clan_ids:
+        return {}
+    placeholders = ",".join("?" * len(clan_ids))
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            f"SELECT clan_id, clan_tag FROM clan_cache WHERE clan_id IN ({placeholders});",
+            tuple(clan_ids),
+        )
+        rows = await cursor.fetchall()
+    return {row[0]: row[1] for row in rows if row[1]}
+
+
+async def upsert_cached_clan(clan: dict, path: str = DB_PATH) -> None:
+    """clan: {clan_id, clan_tag, clan_name, clan_level, member_count}"""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            """
+            INSERT INTO clan_cache (clan_id, clan_tag, clan_name, clan_level, member_count, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(clan_id) DO UPDATE SET
+                clan_tag = excluded.clan_tag,
+                clan_name = excluded.clan_name,
+                clan_level = excluded.clan_level,
+                member_count = excluded.member_count,
+                fetched_at = excluded.fetched_at;
+            """,
+            (clan["clan_id"], clan["clan_tag"], clan["clan_name"],
+             clan["clan_level"], clan["member_count"], now),
+        )
+        await db.commit()
+
+
+# ── Cross-clan rivalry: kills + leaderboard ──────────────────────────────────
+
+async def save_clan_kills(kills: List[dict], path: str = DB_PATH) -> None:
+    if not kills:
+        return
+    async with aiosqlite.connect(path) as db:
+        await db.executemany(
+            """
+            INSERT OR IGNORE INTO clan_kills (
+                match_id, played_at, map,
+                killer_account_id, killer_name, killer_clan_id, killer_tracked,
+                victim_account_id, victim_name, victim_clan_id, victim_tracked,
+                distance_m, weapon, is_headshot
+            ) VALUES (
+                :match_id, :played_at, :map,
+                :killer_account_id, :killer_name, :killer_clan_id, :killer_tracked,
+                :victim_account_id, :victim_name, :victim_clan_id, :victim_tracked,
+                :distance_m, :weapon, :is_headshot
+            );
+            """,
+            kills,
+        )
+        await db.commit()
+
+
+async def get_clan_rivalries(days: Optional[int] = None, limit: int = 10, path: str = DB_PATH) -> List[dict]:
+    """
+    Opponent clans ranked by total encounters with tracked players:
+    kills = tracked players killing that clan, deaths = that clan killing
+    tracked players. Kills between two tracked players are left out.
+    """
+    cutoff = (
+        (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if days else ""
+    )
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT r.clan_id, c.clan_tag, c.clan_name,
+                   SUM(r.kill) AS kills, SUM(r.death) AS deaths
+            FROM (
+                SELECT victim_clan_id AS clan_id, 1 AS kill, 0 AS death
+                FROM clan_kills
+                WHERE killer_tracked = 1 AND victim_tracked = 0 AND played_at >= ?
+                UNION ALL
+                SELECT killer_clan_id, 0, 1
+                FROM clan_kills
+                WHERE victim_tracked = 1 AND killer_tracked = 0 AND played_at >= ?
+            ) AS r
+            LEFT JOIN clan_cache c ON c.clan_id = r.clan_id
+            GROUP BY r.clan_id
+            ORDER BY kills + deaths DESC, kills DESC
+            LIMIT ?;
+            """,
+            (cutoff, cutoff, limit),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]

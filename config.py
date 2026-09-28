@@ -45,6 +45,13 @@ DEFAULT_CONFIG = {
     "check_interval_seconds": 150,
     "request_delay":          9.0,
     "max_retries":            2,
+    # Cross-clan rivalry tracking (rivalry.py). The scanner shares the PUBG
+    # API budget with the tracker: it only runs between tracker cycles and
+    # always leaves rivalry_reserve_requests unused in the current rate-limit
+    # window. Player/clan lookups are cached for rivalry_cache_days.
+    "rivalry_enabled":          True,
+    "rivalry_reserve_requests": 4,
+    "rivalry_cache_days":       7,
     # Optional: role ID to ping on chicken dinner (0 = disabled)
     "winner_role_id":         0,
     # How many posted match IDs to keep in the database

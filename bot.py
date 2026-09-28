@@ -11,6 +11,7 @@ from discord.ext import commands, tasks
 import database as db
 import shame
 from embeds import create_enhanced_match_embed, create_winner_embed
+from rivalry import RivalryScanner
 from tracker import AsyncPUBGMatchTracker
 from weekly_stats import WeeklyStatsManager
 
@@ -39,6 +40,9 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
         weekly_post_day: int = 6,
         weekly_post_hour: int = 18,
         weekly_post_timezone: str = "Europe/Oslo",
+        rivalry_enabled: bool = True,
+        rivalry_reserve_requests: int = 4,
+        rivalry_cache_days: int = 7,
     ):
         self.bot              = bot
         self.channel_id       = channel_id
@@ -62,6 +66,12 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
 
         self.tracker       = AsyncPUBGMatchTracker(api_key, request_delay, max_retries)
         self.stats_manager = WeeklyStatsManager(max_history=posted_matches_max_history)
+        self.rivalry = RivalryScanner(
+            self.tracker,
+            lambda: [name for name, _ in self.players],
+            reserve=rivalry_reserve_requests,
+            cache_days=rivalry_cache_days,
+        ) if rivalry_enabled else None
 
         # Posted-match set is loaded from SQLite in cog_load
         self.posted_matches: set = set()
@@ -77,10 +87,14 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
         self.check_matches_loop.change_interval(seconds=self.check_interval)
         self.check_matches_loop.start()
         self.weekly_posts_loop.start()
+        if self.rivalry:
+            self.rivalry.start()
 
     async def cog_unload(self):
         self.check_matches_loop.cancel()
         self.weekly_posts_loop.cancel()
+        if self.rivalry:
+            await self.rivalry.stop()
         await self.tracker.close_session()
 
     @commands.Cog.listener()
@@ -88,7 +102,7 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
         logger.info(f"📡 PUBG cog ready — tracking {len(self.players)} players")
         logger.info(f"📢 Posting to channel: {self.channel_id}")
         logger.info(f"🔄 Poll interval: {self.check_interval}s")
-        logger.info("💬 Commands: !addplayer !removeplayer !listplayers !best !weeklynow !shame !shamenow !shametest\n")
+        logger.info("💬 Commands: !addplayer !removeplayer !listplayers !best !rivalry !weeklynow !shame !shamenow !shametest\n")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -172,6 +186,26 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
             await ctx.send("⚠️ No match data in the database yet!")
             return
         embed = self.stats_manager.create_best_embed(rows)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="rivalry")
+    async def rivalry_cmd(self, ctx, days: int = None):
+        """Top rival clans vs tracked players — !rivalry [days]"""
+        rows = await db.get_clan_rivalries(days=days, limit=10)
+        if not rows:
+            await ctx.send("⚔️ No cross-clan kills recorded yet!")
+            return
+        lines = []
+        for i, r in enumerate(rows, 1):
+            tag  = discord.utils.escape_markdown(r["clan_tag"] or "?")
+            name = discord.utils.escape_markdown(r["clan_name"] or r["clan_id"])
+            lines.append(f"{i}. **[{tag}]** {name} — {r['kills']} kills / {r['deaths']} deaths")
+        embed = discord.Embed(
+            title="⚔️ Clan Rivalries",
+            description="\n".join(lines),
+            color=discord.Color.dark_red(),
+        )
+        embed.set_footer(text=f"Last {days} days" if days else "All time")
         await ctx.send(embed=embed)
 
     @commands.command(name="weeklynow")
@@ -321,18 +355,28 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
             self.tracker.reset_cycle()
             tracked_names = [name for name, _ in self.players]
 
-            for idx, (player_name, platform) in enumerate(self.players, 1):
-                logger.info(f"{'─'*80}")
-                logger.info(f"[{idx}/{len(self.players)}] Fetching: {player_name}")
-                logger.info(f"{'─'*80}")
-                await self.tracker.get_latest_match(player_name, platform, tracked_names)
-                if idx < len(self.players):
-                    await asyncio.sleep(self.tracker.request_delay)
+            # Rivalry scanner holds off on rate-limited calls while we poll
+            if self.rivalry:
+                self.rivalry.tracker_busy()
+            try:
+                for idx, (player_name, platform) in enumerate(self.players, 1):
+                    logger.info(f"{'─'*80}")
+                    logger.info(f"[{idx}/{len(self.players)}] Fetching: {player_name}")
+                    logger.info(f"{'─'*80}")
+                    await self.tracker.get_latest_match(player_name, platform, tracked_names)
+                    if idx < len(self.players):
+                        await asyncio.sleep(self.tracker.request_delay)
+            finally:
+                if self.rivalry:
+                    self.rivalry.tracker_idle()
 
             self.tracker.print_cycle_summary(self.cycle_number)
 
             if self.tracker.results:
                 await self._post_matches(self.tracker.results)
+                if self.rivalry:
+                    for match in self.tracker.results:
+                        await self.rivalry.enqueue(match)
 
             self.cycle_number += 1
             logger.info(f"\n{'='*80}")

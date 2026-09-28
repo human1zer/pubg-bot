@@ -66,6 +66,9 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
     weekly_post_day      = config.get("weekly_post_day", 6)
     weekly_post_hour     = config.get("weekly_post_hour", 18)
     weekly_post_timezone = config.get("weekly_post_timezone", "Europe/Oslo")
+    rivalry_enabled      = config.get("rivalry_enabled", True)
+    rivalry_reserve      = config.get("rivalry_reserve_requests", 4)
+    rivalry_cache_days   = config.get("rivalry_cache_days", 7)
 
     birthday_channel_id = config.get("birthday_channel_id", 0)
     birthday_role_name  = config.get("birthday_role_name", "🎂 Birthday")
@@ -103,6 +106,9 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
             weekly_post_day=weekly_post_day,
             weekly_post_hour=weekly_post_hour,
             weekly_post_timezone=weekly_post_timezone,
+            rivalry_enabled=rivalry_enabled,
+            rivalry_reserve_requests=rivalry_reserve,
+            rivalry_cache_days=rivalry_cache_days,
         )
         if birthday_channel_id:
             await setup_birthday_cog(

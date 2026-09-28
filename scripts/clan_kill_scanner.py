@@ -1,139 +1,109 @@
 """
-clan_kill_scanner.py — one-off utility, not part of the bot's runtime.
+clan_kill_scanner.py — dry-run rivalry scan of one player's latest match.
 
-Scans the most recent match of a given player for cross-clan kills
-(kills where the killer and victim belong to different PUBG clans).
+Runs the same RivalryScanner the bot uses (rivalry.py) on demand and
+prints what it would record, plus a breakdown of every kill involving a
+tracked player (players.txt + the given name) and why it was skipped.
+
+Scan only: it does not queue the match, mark it scanned, or save kills,
+so the bot still scans the match normally. The only DB writes are the
+player/clan lookup caches (player_cache / clan_cache).
 
 Usage:
-    python scripts/clan_kill_scanner.py [player_name]
+    python scripts/clan_kill_scanner.py [player_name]           # player's latest match
+    python scripts/clan_kill_scanner.py --match <match_id>      # a specific match
 
 Requires PUBG_API_KEY in .env (see .env.example) or config.json — same
-credentials as the rest of the bot. `requests` must be installed
-(it isn't a runtime dependency of the bot itself).
+credentials as the rest of the bot.
 """
 
+import argparse
+import asyncio
 import os
 import sys
-import time
-
-import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import load_config  # noqa: E402
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import database as db                   # noqa: E402
+from config import load_config          # noqa: E402
+from Main import load_players_from_file  # noqa: E402
+from rivalry import RivalryScanner, ScanStats  # noqa: E402
+from tracker import AsyncPUBGMatchTracker  # noqa: E402
 
 PLATFORM = "steam"
 
-config = load_config()
-if not config:
-    sys.exit(1)
 
-API_KEY = config.get("pubg_api_key")
-if not API_KEY or API_KEY == "YOUR_PUBG_API_KEY_HERE":
-    print("❌ PUBG API key not set. Add it to .env (PUBG_API_KEY) or config.json.")
-    sys.exit(1)
+async def main(player_name: str, match_id: str, api_key: str, request_delay: float):
+    await db.init_db()
+    tracker = AsyncPUBGMatchTracker(api_key, request_delay=request_delay)
+    tracked = [name for name, _ in load_players_from_file()]
+    if player_name and player_name.lower() not in {n.lower() for n in tracked}:
+        tracked.append(player_name)
+    scanner = RivalryScanner(tracker, lambda: tracked, platform=PLATFORM)
 
-HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Accept": "application/vnd.api+json",
-}
-BASE = f"https://api.pubg.com/shards/{PLATFORM}"
+    try:
+        if match_id:
+            print(f"[1] Fetching match {match_id}...")
+            match = await tracker.get_match_details(match_id, PLATFORM, tracked)
+        else:
+            print(f"[1] Fetching latest match for {player_name}...")
+            match = await tracker.get_latest_match(player_name, PLATFORM, tracked)
+        if not match:
+            print("❌ Could not fetch a match.")
+            return
+        if not match.get("telemetry_url"):
+            print("❌ Match has no telemetry URL.")
+            return
+        print(f"  Match: {match['match_id']} | {match['map']} | {match['match_category']}")
 
+        print("\n[2] Scanning telemetry (dry run — nothing saved)...")
+        stats = ScanStats()
+        kills = await scanner.scan_match({
+            "match_id":      match["match_id"],
+            "played_at":     match["played_at"],
+            "map":           match["map"],
+            "telemetry_url": match["telemetry_url"],
+        }, save=False, stats=stats)
+    finally:
+        await tracker.close_session()
 
-def get_clan_tag(account_id):
-    """Fetch clanTag for a single player account."""
-    r = requests.get(f"{BASE}/players/{account_id}", headers=HEADERS)
-    if r.status_code != 200:
-        return None
-    attrs = r.json()["data"]["attributes"]
-    clan_id = attrs.get("clanId")
-    if not clan_id:
-        return None
-    r2 = requests.get(f"{BASE}/clans/{clan_id}", headers=HEADERS)
-    if r2.status_code != 200:
-        return None
-    return r2.json()["data"]["attributes"].get("clanTag")
+    tags = await db.get_clan_tags(list({c for e in stats.events for c in (e[1], e[3]) if c}))
 
-
-def main():
-    player_name = sys.argv[1] if len(sys.argv) > 1 else "Human1zer"
-
-    # Step 1 — get latest match
-    print(f"[1] Fetching latest match for {player_name}...")
-    r = requests.get(f"{BASE}/players?filter[playerNames]={player_name}", headers=HEADERS)
-    player    = r.json()["data"][0]
-    match_id  = player["relationships"]["matches"]["data"][0]["id"]
-    print(f"  Match ID: {match_id}")
-
-    # Step 2 — get all players in match (account_id + name)
-    print(f"\n[2] Fetching match data...")
-    r = requests.get(f"{BASE}/matches/{match_id}", headers=HEADERS)
-    match_data = r.json()
-
-    # Get telemetry URL + map
-    map_name = match_data["data"]["attributes"].get("mapName", "Unknown")
-    tel_url  = None
-    for item in match_data.get("included", []):
-        if item["type"] == "asset":
-            tel_url = item["attributes"]["URL"]
-
-    # Build name -> account_id map from participants
-    name_to_account = {}
-    for item in match_data.get("included", []):
-        if item["type"] == "participant":
-            attrs = item["attributes"]["stats"]
-            name  = attrs.get("name")
-            pid   = attrs.get("playerId")  # account.xxxx
-            if name and pid and pid.startswith("account."):
-                name_to_account[name] = pid
-
-    print(f"  Players in match: {len(name_to_account)}")
-    print(f"  Map: {map_name}")
-
-    # Step 3 — fetch clan for each player (only first 20 to avoid rate limit)
-    print(f"\n[3] Fetching clan tags (first 20 players)...")
-    name_to_clan = {}
-    players_list = list(name_to_account.items())[:20]
-
-    for i, (name, account_id) in enumerate(players_list):
-        tag = get_clan_tag(account_id)
-        name_to_clan[name] = tag
-        status = f"[{tag}]" if tag else "no clan"
-        print(f"  {i+1:2}. {name:30s} → {status}")
-        time.sleep(0.2)  # be nice to the API
-
-    # Step 4 — scan kills using clan lookup
-    print(f"\n[4] Fetching telemetry + scanning kills...")
-    r = requests.get(tel_url)
-    telemetry = r.json()
-    kills = [e for e in telemetry if e.get("_T") == "LogPlayerKillV2"]
-
-    cross_clan_kills = []
-    for k in kills:
-        killer_name = (k.get("killer") or {}).get("name", "")
-        victim_name = (k.get("victim") or {}).get("name", "")
-        k_clan = name_to_clan.get(killer_name)
-        v_clan = name_to_clan.get(victim_name)
-
-        if k_clan and v_clan and k_clan != v_clan:
-            dmg  = k.get("killerDamageInfo") or {}
-            dist = dmg.get("distance", 0) / 100
-            cross_clan_kills.append({
-                "killer": killer_name, "killer_clan": k_clan,
-                "victim": victim_name, "victim_clan": v_clan,
-                "distance": round(dist, 1), "map": map_name
-            })
+    def who(name, clan_id):
+        return f"[{tags.get(clan_id, clan_id[:13])}]{name}" if clan_id else f"{name} (no clan)"
 
     print(f"\n{'=' * 60}")
-    print(f"CROSS-CLAN KILLS FOUND: {len(cross_clan_kills)}")
-    for k in cross_clan_kills:
-        print(f"  💀 [{k['killer_clan']}]{k['killer']} killed [{k['victim_clan']}]{k['victim']} | {k['distance']}m")
+    print("DEBUG SUMMARY")
+    print(f"  LogPlayerKillV2 events:      {stats.kill_events}")
+    print(f"  involving tracked players:   {stats.tracked_events}")
+    print(f"  recorded (cross-clan):       {stats.recorded}")
+    print(f"  skipped:                     {sum(stats.skipped.values())}")
+    for reason in ("suicide", "bot", "environment (no killer)", "no clan", "same clan"):
+        print(f"    {reason:26s} {stats.skipped.get(reason, 0)}")
 
-    print(f"\nCLAN TAGS SEEN IN THIS MATCH:")
-    clans_seen = set(v for v in name_to_clan.values() if v)
-    for c in sorted(clans_seen):
-        print(f"  [{c}]")
+    if stats.events:
+        print("\nTRACKED KILL EVENTS:")
+        for k_name, k_clan, v_name, v_clan, outcome in stats.events:
+            # Clans are only resolved for events that got past the bot/suicide checks
+            resolved = outcome in ("no clan", "same clan", "recorded")
+            killer = who(k_name, k_clan) if resolved else (k_name or "—")
+            victim = who(v_name, v_clan) if resolved else v_name
+            print(f"  {killer} → {victim}  [{outcome}]")
     print("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    config = load_config()
+    if not config:
+        sys.exit(1)
+    api_key = config.get("pubg_api_key")
+    if not api_key or api_key == "YOUR_PUBG_API_KEY_HERE":
+        print("❌ PUBG API key not set. Add it to .env (PUBG_API_KEY) or config.json.")
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Dry-run rivalry scan of one match.")
+    parser.add_argument("player_name", nargs="?", default="Human1zer",
+                        help="scan this player's latest match (default: Human1zer)")
+    parser.add_argument("--match", dest="match_id", help="scan this match ID instead")
+    args = parser.parse_args()
+    asyncio.run(main(args.player_name, args.match_id, api_key, config.get("request_delay", 9.0)))

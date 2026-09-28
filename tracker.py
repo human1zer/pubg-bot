@@ -26,6 +26,11 @@ class AsyncPUBGMatchTracker:
         self.cycle_start_time = None
         self.last_match_ids: Dict[str, str] = {}
         self.processed_matches_this_cycle: Set[str] = set()
+
+        # Last-seen rate limit headers. Shared with RivalryScanner (same API
+        # key, same budget) so it can back off before the tracker runs dry.
+        self.rate_remaining: Optional[int] = None
+        self.rate_reset: Optional[int] = None   # unix timestamp
         
         self.session: Optional[aiohttp.ClientSession] = None
     
@@ -50,6 +55,10 @@ class AsyncPUBGMatchTracker:
         remaining = headers.get('X-RateLimit-Remaining', 'N/A')
         
         if remaining != 'N/A':
+            self.rate_remaining = int(remaining)
+            reset = headers.get('X-RateLimit-Reset')
+            if reset:
+                self.rate_reset = int(reset)
             logger.info(f"📊 Rate Limit: {remaining}/{limit} remaining")
             if int(remaining) < 3:
                 logger.warning(f"⚠️  WARNING: Only {remaining} requests left!")
@@ -185,6 +194,11 @@ class AsyncPUBGMatchTracker:
             match_category = self.determine_match_category(game_mode, match_type, is_custom)
             
             included = data.get('included', [])
+
+            telemetry_url = next(
+                (item['attributes'].get('URL') for item in included if item['type'] == 'asset'),
+                None
+            )
             
             all_players_stats = {}
             
@@ -205,6 +219,7 @@ class AsyncPUBGMatchTracker:
                 "duration_minutes": duration // 60,
                 "played_at": created_at,
                 "played_at_formatted": self.format_datetime(created_at),
+                "telemetry_url": telemetry_url,
                 "all_players_stats": all_players_stats
             }
             

@@ -18,6 +18,7 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 - Chicken dinner alert — special gold embed when any tracked player places #1, with optional role ping
 - Weekly summaries — once a week (configurable day/hour/timezone, default Sunday 18:00 Europe/Oslo) posts best player, full leaderboard, and all-time longest kills
 - Wall of Shame — posted right after the weekly summary, same run, same channel: the week's worst plays, followed by a dry, deadpan digest of every shame-worthy event from that week
+- Cross-clan rivalries — scans match telemetry for kills between tracked players and players in other PUBG clans; `!rivalry` shows the top rival clans (kills vs deaths). Runs in the background, throttled so it never eats into the tracker's API rate limit
 - SQLite storage — all match history and deduplication backed by a proper database
 - Dynamic player management — add/remove players via Discord commands without restarting
 - No duplicate posts — match IDs are persisted so restarts never double-post
@@ -43,11 +44,12 @@ pubg-bot/
 ├── embeds.py                # Match embed builder + chicken dinner embed
 ├── weekly_stats.py          # Weekly stats calculations and embed builders
 ├── shame.py                 # Wall of Shame — weekly award board + weekly digest lines
+├── rivalry.py               # Cross-clan rivalry scanner — telemetry kills, clan lookups, rate-limit throttling
 ├── database.py              # Async SQLite layer (matches, posted match IDs, bot state)
 ├── birthday_bot.py          # BirthdayCog — birthday commands, daily announcement, PUBG crossover
 ├── fetch_longest_kills.py   # Weekly job to seed all-time longest kills data from the PUBG API
 ├── scripts/
-│   └── clan_kill_scanner.py # Manual one-off utility, not part of the bot's runtime
+│   └── clan_kill_scanner.py # Dry-run rivalry scan of one match with a skip-reason breakdown (debug, saves nothing)
 ├── players.txt              # PUBG player names to track (one per line)
 ├── config.example.json      # Config template — copy to config.json and fill in
 └── .env.example             # Secrets template — copy to .env and fill in
@@ -111,6 +113,9 @@ DISCORD_TOKEN=your_discord_bot_token
   "check_interval_seconds": 150,
   "request_delay": 7,
   "max_retries": 3,
+  "rivalry_enabled": true,
+  "rivalry_reserve_requests": 4,
+  "rivalry_cache_days": 7,
   "winner_role_id": 0,
   "posted_matches_max_history": 500,
   "birthday_channel_id": 0,
@@ -129,6 +134,9 @@ DISCORD_TOKEN=your_discord_bot_token
 | `weekly_post_day` | Day of week for the weekly summary + Wall of Shame run — `datetime.weekday()` values, Monday=0 … Sunday=6 (default 6) |
 | `weekly_post_hour` | Local hour (in `weekly_post_timezone`) for the weekly summary + Wall of Shame run (default 18) |
 | `weekly_post_timezone` | IANA timezone name for `weekly_post_hour` — using a local zone instead of UTC keeps the wall-clock hour fixed across daylight saving changes (default `Europe/Oslo`) |
+| `rivalry_enabled` | Scan NORMAL/RANKED match telemetry for cross-clan kills involving tracked players (default true) |
+| `rivalry_reserve_requests` | API requests the rivalry scanner always leaves unused in the current rate-limit window, so the tracker is never starved (default 4). The scanner also pauses entirely while a tracker cycle is running |
+| `rivalry_cache_days` | How long player → clan and clan tag lookups are cached before being refreshed (default 7) |
 | `winner_role_id` | Role ID to ping on chicken dinner (0 = disabled) |
 | `posted_matches_max_history` | How many match IDs to keep for deduplication |
 | `birthday_channel_id` | Channel for birthday announcements |
@@ -248,6 +256,7 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!removeplayer <name>` | Admin | Remove a player from tracking |
 | `!listplayers` | Anyone | Show all currently tracked players |
 | `!best` | Anyone | All-time personal best records per player |
+| `!rivalry [days]` | Anyone | Top 10 rival clans — tracked players' kills vs deaths against each clan (all time, or last N days) |
 | `!weeklynow` | Admin | Manually trigger the weekly summary |
 | `!shame` | Admin | Post the Wall of Shame award board + digest lines — always posts to the weekly channel |
 | `!shamenow` | Admin | Force-post the Wall of Shame award board + digest lines |
