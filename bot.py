@@ -316,6 +316,9 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
     @commands.command(name="testpost")
     async def test_post(self, ctx, player_name: str = None):
         """Generate a test embed and save to test_embed.txt."""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Only administrators can do this!")
+            return
         if not player_name and self.players:
             player_name = self.players[0][0]
         elif not player_name:
