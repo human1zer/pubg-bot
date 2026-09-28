@@ -18,7 +18,7 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 - Chicken dinner alert — special gold embed when any tracked player places #1, with optional role ping
 - Weekly summaries — once a week (configurable day/hour/timezone, default Sunday 18:00 Europe/Oslo) posts best player, full leaderboard, and all-time longest kills
 - Wall of Shame — posted right after the weekly summary, same run, same channel: the week's worst plays, followed by a dry, deadpan digest of every shame-worthy event from that week
-- Cross-clan rivalries — scans match telemetry for kills between tracked players and players in other PUBG clans; `!rivalry` shows the top rival clans (kills vs deaths). Runs in the background, throttled so it never eats into the tracker's API rate limit
+- Cross-clan rivalries — scans match telemetry for kills between tracked players and players in other PUBG clans; `!rivalry` shows the top rival clans (kills vs deaths), and the weekly run posts the week's top 5 after the Wall of Shame (skipped if there were no cross-clan kills). Runs in the background, throttled so it never eats into the tracker's API rate limit
 - SQLite storage — all match history and deduplication backed by a proper database
 - Dynamic player management — add/remove players via Discord commands without restarting
 - No duplicate posts — match IDs are persisted so restarts never double-post
@@ -128,7 +128,7 @@ DISCORD_TOKEN=your_discord_bot_token
 | Key | Description |
 |---|---|
 | `discord_channel_id` | Channel for PUBG match posts |
-| `weekly_channel_id` | Channel for weekly summaries and the Wall of Shame weekly post — award board + digest lines (`!shame`/`!shamenow`/`!shametest` always post here) |
+| `weekly_channel_id` | Channel for weekly summaries, the Wall of Shame weekly post — award board + digest lines (`!shame`/`!shamenow`/`!shametest` always post here) — and the weekly clan rivalries section |
 | `shame_dry_run` | When true, `!shametest` previews the weekly shame post without posting it to the weekly channel |
 | `shame_top_n` | How many players to list per Wall of Shame award, worst first (default 5) |
 | `weekly_post_day` | Day of week for the weekly summary + Wall of Shame run — `datetime.weekday()` values, Monday=0 … Sunday=6 (default 6) |

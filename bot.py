@@ -11,7 +11,7 @@ from discord.ext import commands, tasks
 import database as db
 import shame
 from embeds import create_enhanced_match_embed, create_winner_embed
-from rivalry import RivalryScanner
+from rivalry import WEEKLY_TOP_N, RivalryScanner, create_weekly_rivalry_embed
 from tracker import AsyncPUBGMatchTracker
 from weekly_stats import WeeklyStatsManager
 
@@ -392,7 +392,8 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
         await self.bot.wait_until_ready()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Weekly posts — weekly summary + Wall of Shame, same run, same schedule
+    # Weekly posts — weekly summary + Wall of Shame + clan rivalries,
+    # same run, same schedule
     # ─────────────────────────────────────────────────────────────────────────
 
     @tasks.loop(hours=1)
@@ -444,8 +445,21 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
                             await channel.send(digest_message)
                         await db.set_state("last_shame_post", week_key)
 
+            # ── Clan rivalries, last (restart-safe, same week guard) ─────────
+            if self.rivalry and await db.get_state("last_rivalry_post") != week_key:
+                rows = await db.get_clan_rivalries(days=7, limit=WEEKLY_TOP_N)
+                if not rows:
+                    logger.info("⚔️ No cross-clan kills this week — skipping rivalry section")
+                else:
+                    channel = self.bot.get_channel(self.weekly_channel_id)
+                    if not channel:
+                        logger.error(f"❌ Channel not found: {self.weekly_channel_id}")
+                    else:
+                        await channel.send(embed=create_weekly_rivalry_embed(rows, days=7))
+                        await db.set_state("last_rivalry_post", week_key)
+
         except Exception as e:
-            logger.error(f"❌ Error posting weekly summary/Wall of Shame: {e}")
+            logger.error(f"❌ Error posting weekly summary/Wall of Shame/rivalries: {e}")
             traceback.print_exc()
 
     @weekly_posts_loop.before_loop

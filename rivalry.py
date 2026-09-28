@@ -22,6 +22,9 @@ the scanner is throttled to never starve the main tracker:
     and sleeps until the window resets rather than dipping into them
   * calls are spaced by the tracker's request_delay
 Telemetry downloads (CDN) aren't rate limited and skip the gate.
+
+create_weekly_rivalry_embed() builds the rivalry section of the weekly
+post (bot.py weekly_posts_loop), in the Wall of Shame's dry tone.
 """
 
 import asyncio
@@ -29,9 +32,11 @@ import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 
 import aiohttp
+import discord
 
 import database as db
 from tracker import AsyncPUBGMatchTracker
@@ -44,6 +49,10 @@ MAX_ATTEMPTS       = 3
 IDLE_POLL_SECONDS  = 300
 RETRY_BACKOFF      = 60
 TELEMETRY_TIMEOUT  = aiohttp.ClientTimeout(total=120)
+
+
+RIVALRY_COLOR = discord.Color.dark_red()
+WEEKLY_TOP_N  = 5
 
 
 class ScanError(Exception):
@@ -316,3 +325,39 @@ class RivalryScanner:
                 "clan_level":   attrs.get("clanLevel"),
                 "member_count": attrs.get("clanMemberCount"),
             })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Weekly post — same dry tone as the Wall of Shame
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _count(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def create_weekly_rivalry_embed(rows: List[dict], days: int = 7) -> discord.Embed:
+    """rows: db.get_clan_rivalries() output, already limited to the top N."""
+    lines = []
+    for i, r in enumerate(rows, start=1):
+        tag  = discord.utils.escape_markdown(r["clan_tag"] or "?")
+        name = discord.utils.escape_markdown(r["clan_name"] or "Unknown clan")
+        diff = r["kills"] - r["deaths"]
+        if diff > 0:
+            verdict = f"We're up {diff}."
+        elif diff < 0:
+            verdict = f"They're up {-diff}."
+        else:
+            verdict = "Even."
+        lines.append(
+            f"{i}. [{tag}] {name} — {_count(r['kills'], 'kill')}, "
+            f"{_count(r['deaths'], 'death')}. {verdict}"
+        )
+    embed = discord.Embed(
+        title=f"Clan Rivalries — Last {days} Days",
+        description="\n".join(lines),
+        color=RIVALRY_COLOR,
+    )
+    embed.set_footer(
+        text=f"Kills are ours. So are the deaths. • {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+    )
+    return embed
