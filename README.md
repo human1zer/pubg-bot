@@ -31,6 +31,11 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 - Upcoming birthdays list — `!birthdays` shows everyone sorted by next occurrence
 - PUBG crossover — if a tracked player gets a chicken dinner on their birthday, posts a special combined embed 🎂🍗
 
+### Ask
+- `!ask <question>` — answered by a local LLM via [Ollama](https://ollama.com) with a sarcastic, roasting persona (max 2 sentences, same language as the question)
+- Model is unloaded from VRAM after `ask_keep_alive` of inactivity, so the GPU frees up between questions
+- If Ollama is down, the bot replies that its brain is offline instead of erroring
+
 ---
 
 ## Project Structure
@@ -47,6 +52,7 @@ pubg-bot/
 ├── rivalry.py               # Cross-clan rivalry scanner — telemetry kills, clan lookups, rate-limit throttling
 ├── database.py              # Async SQLite layer (matches, posted match IDs, bot state)
 ├── birthday_bot.py          # BirthdayCog — birthday commands, daily announcement, PUBG crossover
+├── ask_bot.py               # AskCog — !ask, answered by a local Ollama model
 ├── fetch_longest_kills.py   # Weekly job to seed all-time longest kills data from the PUBG API
 ├── scripts/
 │   └── clan_kill_scanner.py # Dry-run rivalry scan of one match with a skip-reason breakdown (debug, saves nothing)
@@ -143,6 +149,10 @@ DISCORD_TOKEN=your_discord_bot_token
 | `pubg_channel_id` | Channel for the birthday chicken dinner crossover post |
 | `birthday_announce_hour_utc` | Hour (UTC) to post birthday announcements daily |
 | `birthday_role_name` | Must match the role name exactly in your Discord server |
+| `ask_ollama_url` | Ollama chat endpoint for `!ask` (default `http://localhost:11434/api/chat`) |
+| `ask_model` | Ollama model for `!ask` — must already be pulled, e.g. `ollama pull llama3.2:3b` (default `llama3.2:3b`) |
+| `ask_keep_alive` | How long Ollama keeps the model loaded in VRAM after a question (default `5m`) |
+| `ask_system_prompt` | Persona / instructions for `!ask` answers |
 
 ### 3. Discord bot setup
 
@@ -282,6 +292,14 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!birthdayforce @user` | Admin | Force full announcement for any user right now |
 | `!giverole @user` | Admin | Give the birthday role manually (testing) |
 | `!removerole @user` | Admin | Remove the birthday role manually |
+
+---
+
+## Ask Command
+
+| Command | Who | Description |
+|---|---|---|
+| `!ask <question>` | Anyone | Get a sarcastic answer from the local LLM (20s cooldown per user) |
 
 ---
 

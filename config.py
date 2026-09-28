@@ -61,6 +61,12 @@ DEFAULT_CONFIG = {
     "birthday_announce_hour_utc":  8,
     "birthday_role_name":          "🎂 Birthday",
     "pubg_channel_id":             0,
+    # !ask — local Ollama chat. keep_alive controls how long the model stays
+    # loaded in VRAM after a question (so the GPU frees up afterwards).
+    "ask_ollama_url":    "http://localhost:11434/api/chat",
+    "ask_model":         "llama3.2:3b",
+    "ask_keep_alive":    "5m",
+    "ask_system_prompt": "You are a sarcastic Discord bot in a PUBG clan server. Always answer with dry irony and mockery, max 2 sentences. Playful roasting, never hateful. Reply in the same language as the question.",
 }
 
 

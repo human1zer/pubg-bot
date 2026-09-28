@@ -7,10 +7,11 @@ import discord
 from discord.ext import commands
 
 import database as db
-from config import load_config
+from config import DEFAULT_CONFIG, load_config
 from bot import setup as setup_pubg_cog
 from birthday_bot import setup as setup_birthday_cog
 from song_bot import setup as setup_song_cog
+from ask_bot import setup as setup_ask_cog
 
 # Setup logging
 logging.basicConfig(
@@ -113,6 +114,11 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
     song_post_day       = config.get("song_post_day", 4)
     song_post_hour      = config.get("song_post_hour", 20)
 
+    ask_ollama_url      = config.get("ask_ollama_url", "http://localhost:11434/api/chat")
+    ask_model           = config.get("ask_model", "llama3.2:3b")
+    ask_keep_alive      = config.get("ask_keep_alive", "5m")
+    ask_system_prompt   = config.get("ask_system_prompt", DEFAULT_CONFIG["ask_system_prompt"])
+
     intents = discord.Intents.default()
     intents.message_content = True
     intents.members = True
@@ -166,6 +172,14 @@ async def run_bot(config: dict, players: List[Tuple[str, str]]) -> None:
             )
         else:
             logger.warning("⚠️ song_channel_id not set — Song Check disabled.")
+
+        await setup_ask_cog(
+            bot,
+            ollama_url=ask_ollama_url,
+            model=ask_model,
+            system_prompt=ask_system_prompt,
+            keep_alive=ask_keep_alive,
+        )
 
         await bot.start(config["discord_token"])
 
