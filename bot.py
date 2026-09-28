@@ -205,7 +205,10 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
 
     @commands.command(name="shame")
     async def shame_cmd(self, ctx):
-        """Show the Wall of Shame — always posts to the weekly channel."""
+        """Show the Wall of Shame — always posts to the weekly channel. Admin only."""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Only administrators can do this!")
+            return
         await self._post_shame_board(ctx)
 
     @commands.command(name="shamenow")

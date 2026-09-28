@@ -541,7 +541,10 @@ class BirthdayCog(commands.Cog, name="BirthdayCog"):
         embed = make_birthday_embed(member, bday, wishes)
         channel = self.bot.get_channel(self.birthday_channel_id)
         if channel:
-            sent = await channel.send("@everyone", embed=embed)
+            sent = await channel.send(
+                "@everyone", embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=True),
+            )
             await save_wish_message(str(member.id), channel.id, sent.id)
             await mark_announced(str(member.id), datetime.now(timezone.utc).year)
             await ctx.send(f"✅ Birthday announced for **{member.display_name}**!")
@@ -611,7 +614,10 @@ class BirthdayCog(commands.Cog, name="BirthdayCog"):
             await self._give_birthday_role(member)
             wishes = await get_wishes_today(bday["user_id"])
             embed = make_birthday_embed(member, bday, wishes)
-            sent = await channel.send("@everyone", embed=embed)
+            sent = await channel.send(
+                "@everyone", embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=True),
+            )
             await save_wish_message(bday["user_id"], channel.id, sent.id)
             await mark_announced(bday["user_id"], now.year)
             logger.info(f"🎂 Posted birthday for {member.display_name}")

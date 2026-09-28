@@ -249,7 +249,7 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!listplayers` | Anyone | Show all currently tracked players |
 | `!best` | Anyone | All-time personal best records per player |
 | `!weeklynow` | Admin | Manually trigger the weekly summary |
-| `!shame` | Anyone | Post the Wall of Shame award board + digest lines — always posts to the weekly channel |
+| `!shame` | Admin | Post the Wall of Shame award board + digest lines — always posts to the weekly channel |
 | `!shamenow` | Admin | Force-post the Wall of Shame award board + digest lines |
 | `!shametest` | Admin | Preview the full weekly post (award board + digest lines); respects `shame_dry_run` |
 | `!testpost [name]` | Admin | Generate a test embed saved to `test_embed.txt` |
@@ -316,7 +316,7 @@ Only players with a value greater than 0 are listed. An award is skipped entirel
 
 **Digest lines:** a dry, deadpan line for every shame-worthy event that week (suicides, teamkills, roadkills, blue zone deaths, logouts), most recent first — capped at 25 lines with a `+N more` if there's more. Since it runs once a week over a fixed 7-day window, there's no dedup — every qualifying event in range is included every time.
 
-Trigger the award board manually anytime with `!shame` (anyone) or force it with `!shamenow` (admin) — both always post to `weekly_channel_id`, regardless of where the command was typed.
+Trigger the award board manually anytime with `!shame` or `!shamenow` (both admin only) — both always post to `weekly_channel_id`, regardless of where the command was typed.
 
 Preview the full weekly post (award board + digest lines) with `!shametest` (admin). With `shame_dry_run: true` in config, it logs the rendered output to stdout and echoes it back in the invoking channel instead of posting to `weekly_channel_id` — handy for tuning wording without spamming the real channel.
 
