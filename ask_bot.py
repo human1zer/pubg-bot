@@ -88,7 +88,9 @@ class AskCog(commands.Cog):
     # ─────────────────────────────────────────────────────────────────────────
 
     def in_scope(self, guild):
-        return guild is not None and (not self.guild_id or guild.id == self.guild_id)
+        if guild is None:
+            return True
+        return not self.guild_id or guild.id == self.guild_id
 
     def speaker(self, member):
         if member.id == self.bot.user.id:
@@ -113,14 +115,15 @@ class AskCog(commands.Cog):
         return "\n".join(reversed(lines))
 
     async def build_messages(self, message, question, replied_to=None):
-        me = message.guild.me
+        me = message.guild.me if message.guild else self.bot.user
         system = f"{self.system_prompt}\n\nYour name in this server is {me.display_name}."
         group_lore = lore.render_prompt(lore.load_notes())
         if group_lore:
             system += f"\n\nWhat you know about the group from past chats (may be outdated):\n{group_lore}"
         history = await self.recent_chat(message)
         if history:
-            system += f"\n\nRecent messages in #{message.channel.name}, oldest first:\n{history}"
+            where = f"#{message.channel.name}" if message.guild else "this DM"
+            system += f"\n\nRecent messages in {where}, oldest first:\n{history}"
 
         user = f"{message.author.display_name}: {question[:MAX_QUESTION_CHARS]}"
         if replied_to is not None:
@@ -192,12 +195,15 @@ class AskCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot or not self.in_scope(message.guild):
+        if message.author.bot:
+            return
+        is_dm = message.guild is None
+        if not is_dm and not self.in_scope(message.guild):
             return
         if (await self.bot.get_context(message)).valid:
             return   # a command — the command handler deals with it
         replied_to = await self.replied_bot_message(message)
-        if replied_to is None and self.bot.user not in message.mentions:
+        if not is_dm and replied_to is None and self.bot.user not in message.mentions:
             return
         question = self.mention_to_question(message) or "(pinged you without saying anything)"
         try:
