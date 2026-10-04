@@ -4,7 +4,7 @@
 Usage: venv/bin/python scripts/match_card.py <match_id> [player]
 Output: scripts/.cache/<match_id>.png
 """
-import gzip, json, math, os, sqlite3, sys, urllib.request
+import gzip, json, math, os, sqlite3, sys, time, urllib.request
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -107,7 +107,7 @@ def load(match_id, player):
             tel_url = next(i["attributes"]["URL"] for i in inc if i["type"] == "asset")
             tel = cached(f"{match_id}.telemetry.json", lambda: get(tel_url, auth=False))
             return attrs, r["attributes"], len(rosters), team, tel
-    sys.exit("No tracked player found in this match")
+    raise RuntimeError("No tracked player found in this match")
 
 
 def ts(d):
@@ -265,6 +265,9 @@ def roast(asset, rank, n_teams, team, titles):
     if first.endswith(":"):          # model sometimes answers as "Name: ..."
         text = text[len(first):].strip()
     text = text.strip('"“”').strip()
+    import re
+    text = re.sub(r"[^\x20-\u024F\u2010-\u2026]", "", text)   # drop emoji the font can't draw
+    text = re.sub(r"\s{2,}", " ", text).strip()
     return text[:220] or None
 
 
@@ -428,7 +431,7 @@ def draw_map(asset, size, names, color, paths, kills, deaths, zone):
 
     # final-fight inset when the action at the end is small relative to the main view
     fb = final_fight_box(paths, kills, deaths)
-    if fb and fb[2] < side * 0.35:
+    if fb and fb[2] < side * 0.2:
         IN = 420
         fx0, fy0, fside = fb
         inset = draw_layer(crop(fx0, fy0, fside, IN), fx0, fy0, fside, names, color,
@@ -496,7 +499,7 @@ def render(match_id, player=None):
     attrs, roster, n_teams, team, tel = load(match_id, player)
     asset, size = MAP_INFO.get(attrs["mapName"], (None, None))
     if not asset:
-        sys.exit(f"Unknown map {attrs['mapName']}")
+        raise RuntimeError(f"Unknown map {attrs['mapName']}")
     names, paths, kills, deaths, zone = extract(team, tel)
     team.sort(key=impact, reverse=True)
     names = [m["name"] for m in team]
@@ -569,13 +572,52 @@ def render(match_id, player=None):
 
     draw_right(d, W - 40, H - 46, "PUSH · GayAPP", font(20, False), MUTED)
 
-    out = CACHE / f"{match_id}.png"
+    out = CACHE / f"{match_id}-{rank}.png"
     card.save(out, optimize=True)
     print(f"Saved {out}")
     print(f"Rank #{rank}/{n_teams} | kills marked: {len(kills)} | deaths: {len(deaths)}")
     print(f"Roast: {quote}")
     for n in names:
         print(f"  {n:<18} {titles[n][0]:<14} {titles[n][1]}")
+    return out
+
+
+def latest_match_id():
+    """Most recent match in the DB that is still inside PUBG's 14-day telemetry window."""
+    con = sqlite3.connect(DB)
+    row = con.execute(
+        "SELECT match_id FROM matches WHERE match_category='NORMAL' "
+        "AND played_at > strftime('%Y-%m-%dT%H:%M:%SZ','now','-13 days') "
+        "ORDER BY played_at DESC LIMIT 1").fetchone()
+    con.close()
+    return row[0] if row else None
+
+
+def render_cards(match_id, players=None, cleanup=True):
+    """One card per team that has a tracked player. Returns PNG paths (blocking)."""
+    # drop old cards so the cache doesn't grow forever
+    for old in CACHE.glob("*.png"):
+        if time.time() - old.stat().st_mtime > 2 * 86400:
+            old.unlink(missing_ok=True)
+
+    players = [p.lower() for p in (players or tracked_names(match_id))]
+    match = cached(f"{match_id}.match.json", lambda: get(
+        f"https://api.pubg.com/shards/steam/matches/{match_id}"))
+    inc = match["included"]
+    pid_name = {i["id"]: i["attributes"]["stats"]["name"].lower()
+                for i in inc if i["type"] == "participant"}
+    cards = []
+    try:
+        for r in (i for i in inc if i["type"] == "roster"):
+            team = [pid_name[x["id"]] for x in r["relationships"]["participants"]["data"]]
+            hit = next((p for p in players if p in team), None)
+            if hit:
+                cards.append(render(match_id, hit))
+    finally:
+        if cleanup:   # telemetry is tens of MB per match - don't keep it
+            for f in (f"{match_id}.match.json", f"{match_id}.telemetry.json"):
+                (CACHE / f).unlink(missing_ok=True)
+    return cards
 
 
 if __name__ == "__main__":

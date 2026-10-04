@@ -313,6 +313,28 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
         if channel.id != ctx.channel.id:
             await ctx.send(f"✅ Posted to {channel.mention}")
 
+    @commands.command(name="card")
+    async def card_cmd(self, ctx, match_id: str = None):
+        """Post telemetry match card(s) here — latest match if no ID. Admin only."""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Only administrators can do this!")
+            return
+        from scripts import match_card
+        if not match_id:
+            match_id = await asyncio.to_thread(match_card.latest_match_id)
+            if not match_id:
+                await ctx.send("⚠️ No match from the last 13 days in the DB.")
+                return
+        async with ctx.typing():
+            try:
+                cards = await asyncio.to_thread(match_card.render_cards, match_id)
+            except Exception as e:
+                logger.error(f"❌ !card failed for {match_id}: {e!r}")
+                await ctx.send(f"❌ Card failed: `{e}`")
+                return
+        for c in cards:
+            await ctx.send(file=discord.File(c))
+
     @commands.command(name="testpost")
     async def test_post(self, ctx, player_name: str = None):
         """Generate a test embed and save to test_embed.txt."""
