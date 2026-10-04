@@ -293,7 +293,7 @@ def crop_box(paths, kills, deaths, zone, size):
         ys += [pt[1] for pt in p]
     for _, x, y, _t in kills + deaths:
         xs.append(x); ys.append(y)
-    if zone:
+    if zone and not xs:
         x, y, r = zone[-1]
         xs += [x - r, x + r]; ys += [y - r, y + r]
     if not xs:
