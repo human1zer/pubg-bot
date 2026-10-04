@@ -373,11 +373,17 @@ def draw_map(asset, size, names, color, paths, kills, deaths, zone):
         s = W / side
         bx, by = (fx0 - x0) * s, (fy0 - y0) * s
         d.rectangle([bx, by, bx + fside * s, by + fside * s], outline=(255, 255, 255, 220), width=2)
-        # place inset in the corner farthest from the box
-        ix = 20 if bx > W / 2 else W - IN - 20
-        iy = W - IN - 76 if by < W / 2 else 20
-        if ix == 20 and iy == 20:
-            iy = W - IN - 76
+        # place inset in the free corner covering the fewest path points / the box
+        pts = [((x - x0) * s, (y - y0) * s) for pl in paths.values() for x, y, _v, _t in pl]
+        box = (bx, by, bx + fside * s, by + fside * s)
+
+        def cost(cx, cy):
+            inside = sum(cx <= px <= cx + IN and cy <= py <= cy + IN for px, py in pts)
+            overlap = not (box[2] < cx or box[0] > cx + IN or box[3] < cy or box[1] > cy + IN)
+            return inside + (10 ** 6 if overlap else 0)
+
+        corners = [(W - IN - 20, 20), (W - IN - 20, W - IN - 76), (20, W - IN - 76)]
+        ix, iy = min(corners, key=lambda c: cost(*c))
         d.rectangle([ix - 4, iy - 4, ix + IN + 4, iy + IN + 4], fill=(255, 255, 255, 255))
         img.paste(inset, (ix, iy))
         tag = "FINAL FIGHT"
