@@ -42,6 +42,7 @@ GOLD = (255, 200, 60)
 RED = (255, 70, 70)
 FB = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FI = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
 _fonts = {}
 
 
@@ -215,6 +216,70 @@ def assign_titles(team):
     for m in left:
         titles[m["name"]] = ("Tourist", f"walked {m['walkDistance'] / 1000:.1f} km", MUTED)
     return titles
+
+
+# ---------------------------------------------------------------- roast
+
+def load_cfg():
+    try:
+        return json.loads((ROOT.parent / "config.json").read_text())
+    except Exception:
+        return {}
+
+
+def roast(asset, rank, n_teams, team, titles):
+    """One sarcastic line from the local Ollama, same persona as !ask."""
+    cfg = load_cfg()
+    url = cfg.get("ask_ollama_url") or "http://localhost:11434/api/chat"
+    model = cfg.get("ask_model") or "llama3.2:3b"
+    system = cfg.get("ask_system_prompt") or "You're a sarcastic longtime member of this PUBG clan's Discord."
+    for lp in (ROOT.parent / "lore.md", ROOT.parent / "data" / "lore.md"):
+        if lp.exists():
+            system += "\n\nWhat you know about the group:\n" + lp.read_text()[:4000]
+            break
+
+    result = "WON the match (chicken dinner)" if rank == 1 else f"placed #{rank} of {n_teams} teams"
+    facts = [f"Result: {result} on {asset}."]
+    for m in team:
+        t = titles[m["name"]][0]
+        facts.append(f"- {m['name']}: {m['kills']} kills, {m['damageDealt']:.0f} damage, {m['DBNOs']} knocks, "
+                     f"{m['revives']} revives, survived {mmss(m['timeSurvived'])}, award: {t}")
+    prompt = ("Your squad just finished a PUBG match:\n" + "\n".join(facts) +
+              "\n\nReact in the group chat with ONE short line (max 25 words) in English. "
+              "Dry and sarcastic, roast whoever deserves it, use their names. Only use the facts above, never invent events or numbers. Output only the line.")
+    payload = {
+        "model": model, "stream": False, "keep_alive": cfg.get("ask_keep_alive", "5m"),
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        "options": {"num_ctx": 4096, "num_predict": 80, "temperature": 0.9},
+    }
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            text = json.loads(r.read())["message"]["content"].strip()
+    except Exception as e:
+        print(f"Roast skipped: {e!r}")
+        return None
+    text = text.splitlines()[0].strip() if text else ""
+    first = text.split(" ", 1)[0]
+    if first.endswith(":"):          # model sometimes answers as "Name: ..."
+        text = text[len(first):].strip()
+    text = text.strip('"“”').strip()
+    return text[:220] or None
+
+
+def wrap(text, f, width, max_lines=3):
+    lines, cur = [], ""
+    for w in text.split():
+        t = f"{cur} {w}".strip()
+        if f.getlength(t) <= width:
+            cur = t
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines[:max_lines]
 
 
 # ---------------------------------------------------------------- map
@@ -443,7 +508,11 @@ def render(match_id, player=None):
     played = datetime.fromisoformat(attrs["createdAt"].replace("Z", "+00:00")).astimezone(TZ)
 
     HEADER, ROW, TABLE_HEAD, PAD = 210, 118, 64, 30
-    H = HEADER + W + PAD + TABLE_HEAD + ROW * len(team) + PAD + 50
+    quote = roast(asset, rank, n_teams, team, titles)
+    f_q = ImageFont.truetype(FI if os.path.exists(FI) else FR, 30)
+    qlines = wrap(f"“{quote}”", f_q, W - 110) if quote else []
+    RB = 40 * len(qlines) + 40 if qlines else 0
+    H = HEADER + RB + W + PAD + TABLE_HEAD + ROW * len(team) + PAD + 50
     card = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(card)
 
@@ -463,6 +532,15 @@ def render(match_id, player=None):
     td = sum(m["damageDealt"] for m in team)
     draw_right(d, W - 40, 124, f"{pl(tk, 'kill')} · {td:.0f} dmg", font(30), WHITE)
     d.rectangle([0, HEADER - 6, W, HEADER - 2], fill=accent)
+
+    # roast line from Ollama
+    if qlines:
+        y = HEADER + 18
+        d.rectangle([40, y + 2, 46, y + 40 * len(qlines) - 4], fill=accent)
+        for ln in qlines:
+            d.text((64, y), ln, font=f_q, fill=WHITE)
+            y += 40
+        HEADER += RB
 
     # map
     card.paste(draw_map(asset, size, names, color, paths, kills, deaths, zone), (0, HEADER))
@@ -495,6 +573,7 @@ def render(match_id, player=None):
     card.save(out, optimize=True)
     print(f"Saved {out}")
     print(f"Rank #{rank}/{n_teams} | kills marked: {len(kills)} | deaths: {len(deaths)}")
+    print(f"Roast: {quote}")
     for n in names:
         print(f"  {n:<18} {titles[n][0]:<14} {titles[n][1]}")
 
