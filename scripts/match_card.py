@@ -241,9 +241,8 @@ def roast(asset, rank, n_teams, team, titles):
     result = "WON the match (chicken dinner)" if rank == 1 else f"placed #{rank} of {n_teams} teams"
     facts = [f"Result: {result} on {asset}."]
     for m in team:
-        t = titles[m["name"]][0]
         facts.append(f"- {m['name']}: {m['kills']} kills, {m['damageDealt']:.0f} damage, {m['DBNOs']} knocks, "
-                     f"{m['revives']} revives, survived {mmss(m['timeSurvived'])}, award: {t}")
+                     f"{m['revives']} revives, survived {mmss(m['timeSurvived'])}")
     prompt = ("Your squad just finished a PUBG match:\n" + "\n".join(facts) +
               "\n\nReact in the group chat with ONE short line (max 25 words) in English. "
               "Dry and sarcastic, roast whoever deserves it, use their names. Only use the facts above, never invent events or numbers. Output only the line.")
@@ -510,7 +509,7 @@ def render(match_id, player=None):
     won = rank == 1
     played = datetime.fromisoformat(attrs["createdAt"].replace("Z", "+00:00")).astimezone(TZ)
 
-    HEADER, ROW, TABLE_HEAD, PAD = 210, 118, 64, 30
+    HEADER, ROW, TABLE_HEAD, PAD = 210, 96, 64, 30
     quote = roast(asset, rank, n_teams, team, titles)
     f_q = ImageFont.truetype(FI if os.path.exists(FI) else FR, 30)
     qlines = wrap(f"“{quote}”", f_q, W - 110) if quote else []
@@ -556,18 +555,12 @@ def render(match_id, player=None):
     y += TABLE_HEAD
     for m in team:
         n = m["name"]
-        t, tl, tc = titles[n]
         d.rounded_rectangle([30, y, W - 30, y + ROW - 14], 14, fill=PANEL)
         d.rounded_rectangle([30, y, 40, y + ROW - 14], 4, fill=color[n])
-        d.text((64, y + 12), n, font=font(36), fill=WHITE)
-        tag = t.upper()
-        tw = d.textlength(tag, font=font(22))
-        d.rounded_rectangle([64, y + 60, 64 + tw + 22, y + 92], 8, fill=tc)
-        d.text((75, y + 63), tag, font=font(22), fill=BG)
-        d.text((64 + tw + 36, y + 63), tl, font=font(22, False), fill=MUTED)
+        d.text((64, y + 18), n, font=font(36), fill=WHITE)
         vals = [m["kills"], f"{m['damageDealt']:.0f}", m["DBNOs"], m["assists"], m["revives"], mmss(m["timeSurvived"])]
         for (label, rx), v in zip(cols, vals):
-            draw_right(d, rx, y + 32, str(v), font(36), WHITE)
+            draw_right(d, rx, y + 18, str(v), font(36), WHITE)
         y += ROW
 
     draw_right(d, W - 40, H - 46, "PUSH · GayAPP", font(20, False), MUTED)
@@ -578,7 +571,7 @@ def render(match_id, player=None):
     print(f"Rank #{rank}/{n_teams} | kills marked: {len(kills)} | deaths: {len(deaths)}")
     print(f"Roast: {quote}")
     for n in names:
-        print(f"  {n:<18} {titles[n][0]:<14} {titles[n][1]}")
+        print(f"  {n}")
     return out
 
 
