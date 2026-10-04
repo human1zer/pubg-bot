@@ -91,7 +91,6 @@ pubg-bot/
 
 ```bash
 pip install -r requirements.txt
-pip install pillow   # match cards
 ```
 
 Dependencies: `discord.py`, `aiohttp`, `aiosqlite`, `python-dotenv`, `Pillow`
