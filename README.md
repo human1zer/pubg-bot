@@ -1,11 +1,13 @@
 # 🎮 PUBG + Birthday Discord Bot
 
-A self-hosted Discord bot with two features in one process, loaded as separate Cogs:
+A self-hosted Discord bot for a PUBG clan server. Everything runs in one process, loaded as separate Cogs:
 
-- **PUBG Tracker** — automatically tracks matches for a list of players and posts rich stat embeds to your server
+- **PUBG Tracker** — automatically tracks matches for a list of players and posts telemetry match cards (map + stats image) to your server
 - **Birthday Bot** — tracks birthdays, announces them daily, gives a special role, and collects wishes
+- **Song Check** — weekly "drop the last song you listened to" post with its own thread
+- **Ask** — `!ask`, mentions and replies answered by a local LLM ([Ollama](https://ollama.com)) that talks like one of the group and learns the group's lore nightly
 
-Both share one Discord connection (one bot token, one `!` command prefix) and the same config file, started together by `Main.py`.
+All cogs share one Discord connection (one bot token, one `!` command prefix) and the same config file, started together by `Main.py`.
 
 ---
 
@@ -13,15 +15,20 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 
 ### PUBG Tracker
 - Auto match tracking — polls the PUBG API every 2.5 minutes across all tracked players
-- Rich match embeds — kills, damage, headshots, longest kill, survival time, heals, boosts, revives, placement
-- Group match detection — if multiple tracked players were in the same match, posts one combined embed
-- Chicken dinner alert — special gold embed when any tracked player places #1, with optional role ping
+- Telemetry match cards — for every team with a tracked player, renders a PNG card from the match telemetry:
+  - header with placement (`#N / teams` or *WINNER WINNER CHICKEN DINNER!*), map, mode, time, duration, team kills and damage
+  - a one-line roast of the squad from the local Ollama model (same persona and lore as `!ask`; skipped if Ollama is down)
+  - the map zoomed on the team's movement — per-player paths (dashed in vehicles), kills, deaths and the zone — plus a **Final Fight** inset when the team's last two minutes happened in a small area
+  - a stats table per player: kills, damage, knocks, assists, revives, survival time
+- Embed fallback — if a card can't be rendered (telemetry missing, unknown map, timeout), the classic rich stat embed is posted instead; group matches with several tracked players are combined into one embed
+- Chicken dinner alert — the winning team's card (or a gold winner embed) is also posted to `winner_channel_id`, with optional role ping
 - Weekly summaries — once a week (configurable day/hour/timezone, default Sunday 18:00 Europe/Oslo) posts best player, full leaderboard, and all-time longest kills
 - Wall of Shame — posted right after the weekly summary, same run, same channel: the week's worst plays, followed by a dry, deadpan digest of every shame-worthy event from that week
 - Cross-clan rivalries — scans match telemetry for kills between tracked players and players in other PUBG clans; `!rivalry` shows the top rival clans (kills vs deaths), and the weekly run posts the week's top 5 after the Wall of Shame (skipped if there were no cross-clan kills). Runs in the background, throttled so it never eats into the tracker's API rate limit
 - SQLite storage — all match history and deduplication backed by a proper database
 - Dynamic player management — add/remove players via Discord commands without restarting
 - No duplicate posts — match IDs are persisted so restarts never double-post
+- Link filter — messages containing Instagram/Facebook links are deleted with a short notice
 
 ### Birthday Bot
 - Daily birthday announcements — checks every day at a configured hour and posts a birthday embed
@@ -30,6 +37,10 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 - Wish system — members use `!wish @user` to send wishes that appear on the birthday embed
 - Upcoming birthdays list — `!birthdays` shows everyone sorted by next occurrence
 - PUBG crossover — if a tracked player gets a chicken dinner on their birthday, posts a special combined embed 🎂🍗
+
+### Song Check
+- Every week (default Friday 20:00, in `weekly_post_timezone`) posts a "Song Check" message to `song_channel_id` pinging `@everyone`, and opens a "🎵 Last Song" thread for the replies
+- Disabled when `song_channel_id` is 0
 
 ### Ask
 - `!ask <question>` — answered by a local LLM via [Ollama](https://ollama.com), talking like one of the group (short, sarcastic, playful roasting, same language as the message)
@@ -45,7 +56,7 @@ Both share one Discord connection (one bot token, one `!` command prefix) and th
 
 ```
 pubg-bot/
-├── Main.py                  # Single entry point — creates the bot, loads both cogs, runs it
+├── Main.py                  # Single entry point — creates the bot, loads all cogs, runs it
 ├── config.py                # Shared config.json + .env loader
 ├── bot.py                   # PUBGCog — Discord commands, polling loop, match posting
 ├── tracker.py               # Async PUBG API client
@@ -55,11 +66,14 @@ pubg-bot/
 ├── rivalry.py               # Cross-clan rivalry scanner — telemetry kills, clan lookups, rate-limit throttling
 ├── database.py              # Async SQLite layer (matches, posted match IDs, bot state)
 ├── birthday_bot.py          # BirthdayCog — birthday commands, daily announcement, PUBG crossover
+├── song_bot.py              # SongCog — weekly Song Check post + thread
 ├── ask_bot.py               # AskCog — !ask / mentions / replies, answered by a local Ollama model; nightly lore job
 ├── lore.py                  # Group lore — note extraction, merging, pruning, lore.md read/write
 ├── fetch_longest_kills.py   # Weekly job to seed all-time longest kills data from the PUBG API
 ├── scripts/
-│   └── clan_kill_scanner.py # Dry-run rivalry scan of one match with a skip-reason breakdown (debug, saves nothing)
+│   ├── clan_kill_scanner.py # Dry-run rivalry scan of one match with a skip-reason breakdown (debug, saves nothing)
+│   └── match_card.py        # Telemetry match card renderer (map, paths, final-fight inset, roast, stats table)
+├── shame.sql                # Ad-hoc sqlite3 queries for checking shame awards by hand
 ├── players.txt              # PUBG player names to track (one per line)
 ├── config.example.json      # Config template — copy to config.json and fill in
 └── .env.example             # Secrets template — copy to .env and fill in
@@ -72,12 +86,17 @@ pubg-bot/
 - Python 3.9+
 - A [PUBG Developer API key](https://developer.pubg.com/)
 - A Discord bot token
+- DejaVu fonts (`fonts-dejavu-core` on Debian/Ubuntu) for the match cards
+- Optional: [Ollama](https://ollama.com) running locally for `!ask`, lore and the match card roast line
 
 ```bash
 pip install -r requirements.txt
+pip install pillow   # match cards
 ```
 
-Dependencies: `discord.py`, `aiohttp`, `aiosqlite`, `python-dotenv`
+Dependencies: `discord.py`, `aiohttp`, `aiosqlite`, `python-dotenv`, `Pillow`
+
+Map images are downloaded once from the official [pubg/api-assets](https://github.com/pubg/api-assets) repo and cached in `scripts/.cache/maps/`. Match and telemetry JSON are deleted after each render, and rendered cards older than 2 days are cleaned up automatically.
 
 ---
 
@@ -111,50 +130,71 @@ DISCORD_TOKEN=your_discord_bot_token
 **`config.json`** — everything else:
 ```json
 {
-  "pubg_api_key": "fallback_if_no_env",
-  "discord_token": "fallback_if_no_env",
+  "pubg_api_key": "YOUR_PUBG_API_KEY_HERE",
+  "discord_token": "YOUR_DISCORD_BOT_TOKEN_HERE",
   "discord_channel_id": 0,
   "weekly_channel_id": 0,
+  "winner_channel_id": 0,
   "shame_dry_run": false,
   "shame_top_n": 5,
   "weekly_post_day": 6,
   "weekly_post_hour": 18,
   "weekly_post_timezone": "Europe/Oslo",
   "check_interval_seconds": 150,
-  "request_delay": 7,
-  "max_retries": 3,
+  "request_delay": 9.0,
+  "max_retries": 2,
   "rivalry_enabled": true,
   "rivalry_reserve_requests": 4,
   "rivalry_cache_days": 7,
   "winner_role_id": 0,
   "posted_matches_max_history": 500,
   "birthday_channel_id": 0,
-  "pubg_channel_id": 0,
   "birthday_announce_hour_utc": 8,
-  "birthday_role_name": "🎂 Birthday"
+  "birthday_role_name": "🎂 Birthday",
+  "pubg_channel_id": 0,
+  "song_channel_id": 0,
+  "song_post_day": 4,
+  "song_post_hour": 20,
+  "ask_ollama_url": "http://localhost:11434/api/chat",
+  "ask_model": "llama3.2:3b",
+  "ask_keep_alive": "5m",
+  "ask_system_prompt": "You're a longtime member of this PUBG clan's Discord… (see config.example.json)",
+  "ask_guild_id": 0,
+  "lore_channel_ids": [],
+  "lore_hour": 4,
+  "lore_stale_days": 30,
+  "lore_max_tokens": 1500,
+  "lore_model": ""
 }
 ```
 
 | Key | Description |
 |---|---|
-| `discord_channel_id` | Channel for PUBG match posts |
+| `discord_channel_id` | Channel for PUBG match posts (match cards / embeds) |
+| `winner_channel_id` | Channel that also gets the winning team's card on a chicken dinner (0 = `discord_channel_id`) |
 | `weekly_channel_id` | Channel for weekly summaries, the Wall of Shame weekly post — award board + digest lines (`!shame`/`!shamenow`/`!shametest` always post here) — and the weekly clan rivalries section |
 | `shame_dry_run` | When true, `!shametest` previews the weekly shame post without posting it to the weekly channel |
 | `shame_top_n` | How many players to list per Wall of Shame award, worst first (default 5) |
 | `weekly_post_day` | Day of week for the weekly summary + Wall of Shame run — `datetime.weekday()` values, Monday=0 … Sunday=6 (default 6) |
 | `weekly_post_hour` | Local hour (in `weekly_post_timezone`) for the weekly summary + Wall of Shame run (default 18) |
-| `weekly_post_timezone` | IANA timezone name for `weekly_post_hour` — using a local zone instead of UTC keeps the wall-clock hour fixed across daylight saving changes (default `Europe/Oslo`) |
+| `check_interval_seconds` | How often to poll the PUBG API for new matches (default 150) |
+| `request_delay` | Seconds between PUBG API requests — keep ≥ 6 to stay under the rate limit |
+| `max_retries` | Retries per failed PUBG API request |
+| `weekly_post_timezone` | IANA timezone name for `weekly_post_hour` (also used by Song Check and the nightly lore job) — using a local zone instead of UTC keeps the wall-clock hour fixed across daylight saving changes (default `Europe/Oslo`) |
 | `rivalry_enabled` | Scan NORMAL/RANKED match telemetry for cross-clan kills involving tracked players (default true) |
 | `rivalry_reserve_requests` | API requests the rivalry scanner always leaves unused in the current rate-limit window, so the tracker is never starved (default 4). The scanner also pauses entirely while a tracker cycle is running |
 | `rivalry_cache_days` | How long player → clan and clan tag lookups are cached before being refreshed (default 7) |
 | `winner_role_id` | Role ID to ping on chicken dinner (0 = disabled) |
 | `posted_matches_max_history` | How many match IDs to keep for deduplication |
-| `birthday_channel_id` | Channel for birthday announcements |
+| `birthday_channel_id` | Channel for birthday announcements (0 = birthday bot disabled) |
 | `pubg_channel_id` | Channel for the birthday chicken dinner crossover post |
 | `birthday_announce_hour_utc` | Hour (UTC) to post birthday announcements daily |
 | `birthday_role_name` | Must match the role name exactly in your Discord server |
+| `song_channel_id` | Channel for the weekly Song Check (0 = disabled) |
+| `song_post_day` | Day of week for Song Check, Monday=0 … Sunday=6 (default 4 = Friday) |
+| `song_post_hour` | Local hour (in `weekly_post_timezone`) for Song Check (default 20) |
 | `ask_ollama_url` | Ollama chat endpoint for `!ask` (default `http://localhost:11434/api/chat`) |
-| `ask_model` | Ollama model for `!ask` — must already be pulled, e.g. `ollama pull llama3.2:3b` (default `llama3.2:3b`) |
+| `ask_model` | Ollama model for `!ask` and the match card roast line — must already be pulled, e.g. `ollama pull llama3.2:3b` (default `llama3.2:3b`) |
 | `ask_keep_alive` | How long Ollama keeps the model loaded in VRAM after a question (default `5m`) |
 | `ask_system_prompt` | Persona / instructions for `!ask` answers |
 | `ask_guild_id` | Only answer `!ask`, mentions and replies in this server (0 = any server) |
@@ -201,8 +241,8 @@ This populates `longest_kills_alltime.json` which powers the third embed in the 
 
 ## Running as a systemd service
 
-PUBG tracking and the birthday bot now run in the same process (`Main.py` loads both
-as Cogs on one Discord connection), so only one service is needed.
+All features run in the same process (`Main.py` loads every Cog on one Discord
+connection), so only one service is needed.
 
 ```bash
 sudo nano /etc/systemd/system/pubgbot.service
@@ -262,8 +302,8 @@ WantedBy=timers.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable pubgbot birthdaybot pubg-scraper.timer
-sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
+sudo systemctl enable pubgbot pubg-scraper.timer
+sudo systemctl start pubgbot pubg-scraper.timer
 ```
 
 ---
@@ -281,6 +321,7 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!shame` | Admin | Post the Wall of Shame award board + digest lines — always posts to the weekly channel |
 | `!shamenow` | Admin | Force-post the Wall of Shame award board + digest lines |
 | `!shametest` | Admin | Preview the full weekly post (award board + digest lines); respects `shame_dry_run` |
+| `!card [match_id]` | Admin | Render and post the telemetry match card(s) here — latest NORMAL match from the last 13 days if no ID (PUBG keeps telemetry ~14 days) |
 | `!testpost [name]` | Admin | Generate a test embed saved to `test_embed.txt` |
 
 ---
@@ -302,6 +343,14 @@ sudo systemctl start pubgbot birthdaybot pubg-scraper.timer
 | `!birthdayforce @user` | Admin | Force full announcement for any user right now |
 | `!giverole @user` | Admin | Give the birthday role manually (testing) |
 | `!removerole @user` | Admin | Remove the birthday role manually |
+
+---
+
+## Song Check Command
+
+| Command | Who | Description |
+|---|---|---|
+| `!songtest` | Admin | Post the Song Check message + thread right now |
 
 ---
 
@@ -367,11 +416,9 @@ Preview the full weekly post (award board + digest lines) with `!shametest` (adm
 ```bash
 # Live logs
 journalctl -u pubgbot -f
-journalctl -u birthdaybot -f
 
 # Restart after code changes
 sudo systemctl restart pubgbot
-sudo systemctl restart birthdaybot
 
 # Check scraper timer
 systemctl list-timers pubg-scraper.timer
@@ -382,6 +429,7 @@ systemctl list-timers pubg-scraper.timer
 ## Notes
 
 - All players are tracked on the **Steam** platform
-- The PUBG bot and birthday bot run independently — either can be stopped without affecting the other
+- Birthday bot and Song Check are optional — leave `birthday_channel_id` / `song_channel_id` at 0 to disable them
 - Birthday data is stored in `birthdays.db`, PUBG data in `pubg_bot.db` — both excluded from git
+- Match cards can also be rendered from the shell: `venv/bin/python scripts/match_card.py <match_id> [player]` → `scripts/.cache/<match_id>-<rank>.png`
 - The birthday message system is designed to be swapped for AI-generated messages — see the comment inside `get_birthday_message()` in `birthday_bot.py`
