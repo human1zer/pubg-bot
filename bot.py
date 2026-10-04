@@ -558,7 +558,12 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
             logger.warning(f"⚠️ Skipped match {idx}/{total}: no player data")
             return
 
-        await send_embeds(channel, paginate_embed(embed))
+        cards = await self._render_cards(match)
+        if cards:
+            for c in cards:
+                await channel.send(file=discord.File(c))
+        else:
+            await send_embeds(channel, paginate_embed(embed))
 
         # ── Chicken dinner alert ─────────────────────────────────────────────
         winners = [
@@ -571,7 +576,12 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
 
             winner_channel = self.bot.get_channel(self.winner_channel_id) or channel
 
-            await send_embeds(winner_channel, paginate_embed(winner_embed), content=mention or None)
+            win_cards = [c for c in cards if c.name.endswith("-1.png")]
+            if win_cards:
+                for c in win_cards:
+                    await winner_channel.send(content=mention or None, file=discord.File(c))
+            else:
+                await send_embeds(winner_channel, paginate_embed(winner_embed), content=mention or None)
             logger.info(f"🏆 Chicken dinner alert posted for: {', '.join(winners)}")
 
             birthday_cog = self.bot.get_cog("BirthdayCog")
@@ -580,6 +590,17 @@ class PUBGCog(commands.Cog, name="PUBGCog"):
 
         players_in = list(match.get("all_players_stats", {}).keys())
         logger.info(f"✅ Posted {idx}/{total}: {', '.join(players_in)}")
+
+    async def _render_cards(self, match: dict):
+        """Telemetry match card(s) for this match; [] means fall back to the embed."""
+        try:
+            from scripts import match_card
+            players = list(match.get("all_players_stats", {}).keys())
+            return await asyncio.wait_for(
+                asyncio.to_thread(match_card.render_cards, match["match_id"], players), timeout=300)
+        except Exception as e:
+            logger.warning(f"⚠️ Match card failed for {str(match.get('match_id'))[:16]}, using embed: {e!r}")
+            return []
 
     async def _save_matches_for_stats(self, matches: List[dict]):
         try:
