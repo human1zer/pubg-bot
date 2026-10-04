@@ -589,7 +589,7 @@ def latest_match_id():
 def render_cards(match_id, players=None, cleanup=True):
     """One card per team that has a tracked player. Returns PNG paths (blocking)."""
     # drop old cards so the cache doesn't grow forever
-    for old in CACHE.glob("*.png"):
+    for old in (f for f in CACHE.glob("*") if f.is_file()):
         if time.time() - old.stat().st_mtime > 2 * 86400:
             old.unlink(missing_ok=True)
 
